@@ -42,6 +42,14 @@ create table if not exists public.visited_buildings (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+-- Remarks (added later; safe to re-run).
+alter table public.visited_buildings add column if not exists remarks text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'visited_buildings_remarks_len') then
+    alter table public.visited_buildings add constraint visited_buildings_remarks_len check (char_length(remarks) <= 2000);
+  end if;
+end $$;
+
 create unique index if not exists visited_buildings_way_id_key
   on public.visited_buildings (way_id) where way_id is not null;
 
