@@ -52,6 +52,15 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .leaflet-container .leaflet-control-attribution.open{white-space:normal;background:rgba(255,255,255,.95)}
 .leaflet-container .leaflet-control-attribution:not(.open){font-size:0;padding:2px 8px;border-radius:6px 0 0 0}
 .leaflet-container .leaflet-control-attribution:not(.open)::before{content:"Credits";font-size:10px;color:#444}
+@media (prefers-color-scheme:dark){
+  .leaflet-container{background:#181b1d}
+  .leaflet-container .leaflet-control-attribution{background:rgba(28,34,32,.8);color:#aab3ae}
+  .leaflet-container .leaflet-control-attribution.open{background:rgba(28,34,32,.95)}
+  .leaflet-container .leaflet-control-attribution:not(.open)::before{color:#c3cbc6}
+  .leaflet-container .leaflet-control-attribution a{color:#8fc7ff}
+  /* Backup picture map (only used when the vector map cannot start): darken it. */
+  .pale-tiles{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
+}
 
 /* Search bar */
 .topbar{position:absolute;z-index:1000;left:0;right:0;top:0;
