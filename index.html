@@ -747,7 +747,18 @@ async function resolveGoogleQuery(q){
     if (area && house) {
       try {
         const spot = await gsiHouse(area, +num, house[1] + (house[2] ? '-' + house[2] : ''));
-        if (spot) return { ...spot, label: name || '' };
+        if (spot) {
+          // An address point can sit on a small neighbour (Kobe Hankyu's lands on a 79 m² shed).
+          // If OpenStreetMap knows the named place within 200 m, use that spot instead.
+          if (name) {
+            const d = 0.002;
+            const hits = (await nominatim({ q: name, limit: 3, bounded: 1,
+              viewbox: [spot.lng - d, spot.lat + d, spot.lng + d, spot.lat - d].join(',') }).catch(() => []))
+              .filter(x => x.category !== 'highway' && x.category !== 'railway');
+            if (hits.length) return { lat: +hits[0].lat, lng: +hits[0].lon, label: name };
+          }
+          return { ...spot, label: name || '' };
+        }
       } catch (e) {}
     }
   }
