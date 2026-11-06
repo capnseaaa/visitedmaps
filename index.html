@@ -683,12 +683,16 @@ async function resolveGoogleQuery(q){
   const chomeIdx = parts.findIndex(t => /\d+\s*Chome/i.test(t));
   // A name is a first part that is not an address piece.
   const addrPiece = t => /^\d|〒|\bChome\b|\bWard\b|-ku$|\bPrefecture\b|^(Hyogo|Osaka|Kyoto|Tokyo)\b/i.test(t) || t === city;
-  const name = !reversed && parts.length > 1 && chomeIdx !== 0 && !addrPiece(parts[0]) ? parts[0] : '';
+  let name = !reversed && parts.length > 1 && chomeIdx !== 0 && !addrPiece(parts[0]) ? parts[0] : '';
   // "8 Chome-1-8 Onoedori" (or reversed: "1 Chome-7-2" after "Sannomiyacho") -> "Onoedori 8-chome", then ward and city.
   let area = null;
   if (chomeIdx >= 0) {
-    let m = parts[chomeIdx].match(/(\d+)\s*Chome[-\d]*\s+(.+)/i), town = m && m[2], num = m && m[1];
-    if (!m && reversed) { const n = parts[chomeIdx].match(/(\d+)\s*Chome/i); if (n) { num = n[1]; town = parts[chomeIdx + 1]; } }
+    let m = !reversed && parts[chomeIdx].match(/(\d+)\s*Chome[-\d]*\s+(.+)/i), town = m && m[2], num = m && m[1];
+    if (reversed) {
+      // "5 Chome-2-3 Maison de Lapis 御幸": the town is the next part; text after the numbers is the name.
+      const n = parts[chomeIdx].match(/(\d+)\s*Chome[-\d]*\s*(.*)$/i);
+      if (n) { num = n[1]; town = parts[chomeIdx + 1]; if (n[2] && !name) name = n[2].trim(); }
+    }
     if (town) {
       const tail = reversed ? parts.slice(chomeIdx + 2, -1).join(', ')
                             : parts.slice(chomeIdx + 1, postIdx > 0 ? postIdx : undefined).join(', ');
