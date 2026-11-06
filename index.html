@@ -421,11 +421,23 @@ function normalize(s){
 
 function validLatLng(lat, lng){ return isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180; }
 
-// Google Maps links. Short links (maps.app.goo.gl) redirect on Google's side and cannot be read from a web page.
+// Google Maps links. Short links (maps.app.goo.gl) redirect on Google's side and a web page cannot
+// read where they go, so the "expand-link" Edge Function in Supabase follows them for us.
+const SHORT_LINK = /https?:\/\/(?:maps\.app\.goo\.gl\/[\w-]+|goo\.gl\/maps\/[\w-]+)\S*/i;
+async function expandShortLink(url){
+  let data, error;
+  try { ({ data, error } = await db.functions.invoke('expand-link', { body: { url } })); }
+  catch (e) { error = e; }
+  if (!error && data && data.url) return data.url;
+  let msg = '';
+  try { msg = (await error.context.json()).error || ''; } catch (e) {}
+  throw new Error('Could not open that short Google link' + (msg ? ' (' + msg + ')' : '') +
+    '. Try again, or long-press the building on this map.');
+}
 function parseGoogleLink(text){
   if (!/google\.[a-z.]+\/maps|maps\.google\.|goo\.gl/i.test(text)) return null;
-  if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(text))
-    throw new Error('Short Google links cannot be read when pasted. Share them to the "Add to Visited Map" Shortcut instead, or long-press the building on this map.');
+  const short = text.match(SHORT_LINK);
+  if (short) return { short: short[0] };
   let s = text; try { s = decodeURIComponent(text); } catch (e) {}
   const num = '(-?\\d{1,3}(?:\\.\\d+)?)';
   const pats = [
@@ -550,7 +562,12 @@ async function resolveGoogleQuery(q){
 }
 
 async function geocode(text){
-  const link = parseGoogleLink(text);
+  let link = parseGoogleLink(text);
+  if (link && link.short) {
+    setStatus('Opening the short Google link…');
+    link = parseGoogleLink(await expandShortLink(link.short));
+    if (!link || link.short) throw new Error('That short link did not lead to a Google Maps place.');
+  }
   if (link && link.query) return resolveGoogleQuery(link.query);
   if (link) return link;
   const m = text.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
@@ -660,7 +677,7 @@ async function addBuilding(g){
 }
 
 let busy = false;
-// Only editors may add. Visitors are sent to sign in; a pending Shortcut add waits for sign-in.
+// Only editors may add. Visitors are sent to sign in; a pending ?add= link waits for sign-in.
 function requireEditor(){
   if (canEdit) return true;
   if (!authReady) { setStatus('Checking sign-in…'); return false; }
@@ -836,7 +853,7 @@ async function refreshAuth(){
   authReady = true;
   updateAccountUi();
   if (location.hash.includes('access_token')) history.replaceState(null, '', location.pathname + location.search);
-  // Finish an add that was waiting for sign-in (from the Shortcut link).
+  // Finish an add that was waiting for sign-in (from a ?add= link).
   let pending = null; try { pending = sessionStorage.getItem('pendingAdd'); } catch (e) {}
   if (pending && canEdit) { try { sessionStorage.removeItem('pendingAdd'); } catch (e) {} runAdd(() => geocode(pending)); }
 }
@@ -967,7 +984,7 @@ document.getElementById('photoBtn').onclick = () => { if (requireEditor()) docum
 document.getElementById('photoFile').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) handlePhoto(f); };
 
 // Add from the page address, e.g. ...visitedmaps/?add=<Google Maps link, Plus Code or coordinates>.
-// An iPhone Shortcut can expand a short Google link and open the page this way.
+// Short Google links work here too; they are expanded like pasted ones.
 (function addFromUrl(){
   let text = null;
   try { text = new URLSearchParams(location.search).get('add'); } catch (e) {}
