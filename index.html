@@ -1272,8 +1272,9 @@ async function handlePhoto(file){
   try {
     note.textContent = gps ? 'Claude is reading the sign…' : 'Claude is reading the sign and looking up the address (up to about 30 s)…';
     const r = await readPhotoWithClaude(file, gps);
+    // Only show choices that lead to a real building: no text chips or name search here.
     if (r.name) query.value = r.name;
-    showChips([r.name, ...(r.text || [])].filter(Boolean).slice(0, 8));
+    chips.remove(); form.remove(); results.remove();
     const sure = { high: 'sure', medium: 'fairly sure', low: 'not sure' }[r.confidence] || 'not sure';
     note.textContent = r.name ? 'Claude read “' + r.name + '” (' + sure + ').' : 'Claude found no building name. Type it below.';
     const bits = [];
@@ -1312,6 +1313,12 @@ async function handlePhoto(file){
         };
         bits.push(show, el('small', { textContent: 'Only the area is known, not the exact building.' }));
       }
+    }
+    if (!gps && !bits.some(x => x.tagName === 'BUTTON')) {
+      // Nothing tied to a building: let the editor point at it on the map instead.
+      pendingName = r.name || '';
+      bits.push(el('small', { textContent: 'Claude could not find where this building is. ' +
+        (r.name ? 'Long-press it on the map to add it as “' + r.name + '”.' : 'Long-press it on the map to add it.') }));
     }
     aiRow.replaceChildren(...bits);
     return;
