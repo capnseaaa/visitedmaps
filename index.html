@@ -665,6 +665,10 @@ async function resolveGoogleQuery(q){
   const pc = await parsePlusCode(q);
   if (pc) return pc;
   q = q.replace(/[−‐―–—]/g, '-');
+  // Spelling variants Google uses: "chōme" (macron), "2-chome-2-11", "2-2-11 Gokodori".
+  q = q.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
+  q = q.replace(/\b(\d+)-?\s*chome-(\d+)(?:-(\d+))?/gi, (m, c, b, h) => c + ' Chome-' + b + (h ? '-' + h : ''));
+  q = q.replace(/(^|,\s*)(\d+)-(\d+)-(\d+)\s+([A-Za-z])/g, '$1$2 Chome-$3-$4 $5');
   const postcode = (q.match(/\b(\d{3}-\d{4})\b/) || [])[1] || '';
   let parts = q.split(',').map(t => t.trim()).filter(Boolean);
   // Google writes Japanese addresses in two orders:
@@ -720,6 +724,17 @@ async function resolveGoogleQuery(q){
     }
   }
   if (area) return { ...area, label: name || '', note: '', approxNote: true };
+  // Last resort: the postcode's area, so at least the right neighbourhood is shown.
+  if (postcode) {
+    const hits = await nominatim({ postalcode: postcode, limit: 1 });
+    if (hits.length) {
+      // Too rough to add a building: show the area and let the editor long-press the right one.
+      map.setView([+hits[0].lat, +hits[0].lon], 17);
+      showArea(+hits[0].lat, +hits[0].lon, 250);
+      pendingName = name || '';
+      throw new Error('Only the area was found' + (name ? ' for “' + name + '”' : '') + '. Long-press the building in the red circle to add it.');
+    }
+  }
   throw new Error('Could not find "' + (name || q) + '". Try the Plus Code, or long-press the building on the map.');
 }
 
@@ -1302,11 +1317,23 @@ async function searchPlaces(q, box){
 let pendingName = '';
 // Red dashed circle marking that area until the building is added or the panel is closed.
 let areaMark = null;
-function showArea(lat, lng){
+function showArea(lat, lng, radius = 60){
   clearArea();
-  areaMark = L.circle([lat, lng], { radius: 60, color: '#e5322d', weight: 3, dashArray: '6 6', fillColor: '#e5322d', fillOpacity: .08, interactive: false }).addTo(map);
+  areaMark = L.circle([lat, lng], { radius, color: '#e5322d', weight: 3, dashArray: '6 6', fillColor: '#e5322d', fillOpacity: .08, interactive: false }).addTo(map);
 }
-function clearArea(){ if (areaMark) { map.removeLayer(areaMark); areaMark = null; } }
+function clearArea(){ if (areaMark) { map.removeLayer(areaMark); areaMark = null; } if (foundMark) { map.removeLayer(foundMark); foundMark = null; } }
+// Red outline on the building a photo led to, shown before it is added, with the map centred on it.
+let foundMark = null;
+async function previewBuilding(lat, lng){
+  const b = await findBuilding(lat, lng).catch(() => null);
+  clearArea();
+  const shape = b ? { type: 'Polygon', coordinates: b.coords } : turf.circle([lng, lat], 6, { units: 'meters', steps: 16 }).geometry;
+  foundMark = L.geoJSON(shape, { interactive: false,
+    style: { color: '#e5322d', weight: 4, opacity: .95, fillColor: '#e5322d', fillOpacity: .25 } }).addTo(map);
+  const c = b ? shapeCentre(b.coords) : [lat, lng];
+  map.setView(c || [lat, lng], Math.max(map.getZoom(), 18));
+  return !!b;
+}
 
 // Photo as base64 JPEG, at most 1280 px on the long side (keeps the Claude cost to about 1,200 image tokens).
 async function photoBase64(file){
@@ -1385,9 +1412,9 @@ async function handlePhoto(file){
     if (r.source && /^https?:\/\//.test(r.source)) bits.push(el('a', { href: r.source, target: '_blank', rel: 'noopener', textContent: 'Where Claude found it' }));
     if (r.note) bits.push(el('small', { textContent: r.note }));
     if (!gps && r.lat != null && r.lng != null && validLatLng(r.lat, r.lng)) {
-      map.setView([r.lat, r.lng], 18);
-      const add = el('button', { type: 'button', className: 'primary', textContent: 'Add at the found location' });
-      add.onclick = () => runAdd(async () => ({ lat: r.lat, lng: r.lng, label: nameNow(r.name) }));
+      previewBuilding(r.lat, r.lng);
+      const add = el('button', { type: 'button', className: 'primary', textContent: 'Add the building outlined in red' });
+      add.onclick = () => { clearArea(); runAdd(async () => ({ lat: r.lat, lng: r.lng, label: nameNow(r.name) })); };
       bits.push(add, el('small', { textContent: 'After adding, check it is the right building. Listing pins can be a little off.' }));
     } else if (!gps && addr) {
       // A full address (with 番/号) finds the exact spot through GSI; otherwise only the area.
@@ -1400,9 +1427,9 @@ async function handlePhoto(file){
         }
       } catch (e) {}
       if (spot) {
-        map.setView([spot.lat, spot.lng], 18);
-        const add = el('button', { type: 'button', className: 'primary', textContent: 'Add at this address' });
-        add.onclick = () => runAdd(async () => ({ lat: spot.lat, lng: spot.lng, label: nameNow(r.name) }));
+        previewBuilding(spot.lat, spot.lng);
+        const add = el('button', { type: 'button', className: 'primary', textContent: 'Add the building outlined in red' });
+        add.onclick = () => { clearArea(); runAdd(async () => ({ lat: spot.lat, lng: spot.lng, label: nameNow(r.name) })); };
         bits.push(add, el('small', { textContent: 'Map position from the address (' + spot.title + '). After adding, check it is the right building.' }));
       } else {
         const show = el('button', { type: 'button', className: 'primary', textContent: 'Show the area on the map' });
