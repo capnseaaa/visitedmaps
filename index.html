@@ -42,6 +42,15 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .item small{color:var(--muted)}
 .item button{padding:4px 10px;font-size:12px}
 #importFile{display:none}
+.pop{display:flex;flex-direction:column;gap:10px;min-width:200px;font:14px system-ui,-apple-system,sans-serif}
+.pop-title{font-weight:600;overflow-wrap:anywhere}
+.swatches{display:flex;flex-wrap:wrap;gap:8px}
+.swatch{width:30px;height:30px;padding:0;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #999;cursor:pointer}
+.swatch.on{box-shadow:0 0 0 3px #111}
+.swatch.custom{background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);-webkit-appearance:none;appearance:none}
+.swatch.custom::-webkit-color-swatch-wrapper{padding:0}
+.swatch.custom::-webkit-color-swatch{border:none;border-radius:50%;opacity:0}
+.pop-del{color:#b3412f;background:#fff;border:1px solid #d9ded9;padding:8px 10px;border-radius:8px}
 </style>
 </head>
 <body>
@@ -86,16 +95,67 @@ function render(fit){
   document.getElementById('count').textContent = entries.length + (entries.length === 1 ? ' building' : ' buildings');
   renderList();
   if (!entries.length) return;
-  let merged = null;
+  // Buildings that touch are merged, but only with others of the same colour.
+  const groups = new Map();
   for (const e of entries) {
+    const c = e.color || fillColor;
     let f = turf.polygon(e.coords);
     try { f = turf.buffer(f, GAP_METERS, { units: 'meters' }) || f; } catch (err) {}
-    try { merged = merged ? (turf.union(merged, f) || merged) : f; } catch (err) { /* skip a bad shape */ }
+    const prev = groups.get(c);
+    try { groups.set(c, prev ? (turf.union(prev, f) || prev) : f); } catch (err) { /* skip a bad shape */ }
   }
-  if (!merged) return;
-  layer = L.geoJSON(merged, { style: { color: fillColor, weight: 1, fillColor: fillColor, fillOpacity: .55 } }).addTo(map);
-  if (fit) map.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 });
+  layer = L.featureGroup();
+  for (const [c, shape] of groups)
+    L.geoJSON(shape, { style: { color: c, weight: 1, fillColor: c, fillOpacity: .55 } }).addTo(layer);
+  layer.addTo(map);
+  if (fit && layer.getLayers().length) map.fitBounds(layer.getBounds(), { padding: [30, 30], maxZoom: 18 });
 }
+
+// Tap a building to recolour or remove it.
+const SWATCHES = ['#2f8f6b', '#2f6fd0', '#d0442f', '#e08a1e', '#e2c12b', '#8a4fc4', '#d0508f', '#6b7280'];
+function entryAt(latlng){
+  const pt = turf.point([latlng.lng, latlng.lat]);
+  let best = null, bestArea = Infinity;
+  for (const e of entries) {
+    let poly;
+    try { poly = turf.buffer(turf.polygon(e.coords), GAP_METERS, { units: 'meters' }); } catch (err) { continue; }
+    if (poly && turf.booleanPointInPolygon(pt, poly)) {
+      const a = turf.area(poly);
+      if (a < bestArea) { bestArea = a; best = e; }
+    }
+  }
+  return best;
+}
+let buildingPop = null;
+function buildingPopup(e, latlng){
+  const box = document.createElement('div'); box.className = 'pop';
+  L.DomEvent.disableClickPropagation(box);
+  const t = document.createElement('div'); t.className = 'pop-title'; t.textContent = e.label;
+  const row = document.createElement('div'); row.className = 'swatches';
+  const current = (e.color || fillColor).toLowerCase();
+  const pick = c => { e.color = c === SWATCHES[0] ? undefined : c; save(); render(false); buildingPopup(e, latlng); };
+  for (const c of SWATCHES) {
+    const s = document.createElement('button'); s.type = 'button'; s.className = 'swatch';
+    s.style.background = c; s.setAttribute('aria-label', 'Colour ' + c);
+    if (c === current || (!e.color && c === SWATCHES[0])) s.classList.add('on');
+    s.onclick = () => pick(c);
+    row.appendChild(s);
+  }
+  const custom = document.createElement('input'); custom.type = 'color'; custom.className = 'swatch custom';
+  custom.value = /^#[0-9a-f]{6}$/i.test(current) ? current : SWATCHES[0];
+  custom.setAttribute('aria-label', 'Pick any colour');
+  custom.onchange = () => pick(custom.value.toLowerCase());
+  row.appendChild(custom);
+  const del = document.createElement('button'); del.type = 'button'; del.className = 'pop-del'; del.textContent = 'Remove building';
+  del.onclick = () => {
+    if (del.dataset.armed) { entries = entries.filter(x => x.id !== e.id); save(); render(false); map.closePopup(); setStatus('Removed.'); }
+    else { del.dataset.armed = '1'; del.textContent = 'Tap again to remove'; }
+  };
+  box.append(t, row, del);
+  if (buildingPop && map.hasLayer(buildingPop)) buildingPop.setLatLng(latlng).setContent(box);
+  else buildingPop = L.popup().setLatLng(latlng).setContent(box).openOn(map);
+}
+map.on('click', ev => { const e = entryAt(ev.latlng); if (e) buildingPopup(e, ev.latlng); });
 
 function renderList(){
   const box = document.getElementById('list');
