@@ -158,7 +158,19 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .pop button.primary{border:0;background:var(--accent);color:var(--accent-fg);padding:10px 14px;border-radius:10px;font-weight:600}
 .pop{display:flex;flex-direction:column;gap:10px;min-width:200px;font:14px system-ui,-apple-system,sans-serif}
 .pop-title{font-weight:600;overflow-wrap:anywhere}
-.statuses{display:flex;flex-direction:column;gap:6px}
+.statuses{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.pop-fold summary{list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none}
+.pop-fold summary::-webkit-details-marker{display:none}
+.status-pick summary{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);font-weight:600}
+.status-pick summary i{width:14px;height:14px;border-radius:50%;flex:none}
+.status-pick summary span{flex:1}
+.status-pick summary small{color:var(--muted);font-weight:400;font-size:12px}
+.status-pick summary small::after{content:" ▾"}
+.status-pick[open] summary small::after{content:" ▴"}
+.pop-more summary{text-align:center;color:var(--muted);font-size:13px;padding:4px}
+.pop-more summary::after{content:" ▾"}
+.pop-more[open] summary::after{content:" ▴"}
+.pop-more-box{display:flex;flex-direction:column;gap:8px;margin-top:6px}
 .status-btn{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);text-align:left}
 .status-btn i{width:14px;height:14px;border-radius:50%;flex:none}
 .status-btn.on{border:2px solid var(--fg);font-weight:600}
@@ -362,6 +374,7 @@ function buildingPopup(e, latlng){
     e.color = color || undefined; render(false); buildingPopup(e, latlng);
   };
   for (const st of STATUSES) {
+    if (st.color === current.color) continue;   // the current status is shown in the folded line
     const s = document.createElement('button'); s.type = 'button'; s.className = 'status-btn';
     const dot = document.createElement('i'); dot.style.background = st.color;
     s.append(dot, st.name);
@@ -410,7 +423,22 @@ function buildingPopup(e, latlng){
   const gm = document.createElement('a'); gm.className = 'pop-gmaps'; gm.target = '_blank'; gm.rel = 'noopener';
   gm.href = 'https://www.google.com/maps/search/?api=1&query=' + (+e.lat).toFixed(6) + ',' + (+e.lng).toFixed(6);
   gm.textContent = 'Open in Google Maps';
-  if (canEdit) box.append(t, meta, row, ...(e.remarks ? [rem] : []), gm, remBtn, ren, del);
+  // Editors see only the current status; tapping it shows the other choices.
+  const statusPick = document.createElement('details'); statusPick.className = 'pop-fold status-pick';
+  const sSum = document.createElement('summary');
+  const sumDot = document.createElement('i'); sumDot.style.background = current.color || fillColor;
+  const sumName = document.createElement('span'); sumName.textContent = current.name;
+  const sumHint = document.createElement('small'); sumHint.textContent = 'Change';
+  sSum.append(sumDot, sumName, sumHint);
+  statusPick.append(sSum, row);
+  // Rename and Remove sit under "More".
+  const more = document.createElement('details'); more.className = 'pop-fold pop-more';
+  const mSum = document.createElement('summary'); mSum.textContent = 'More';
+  const moreBox = document.createElement('div'); moreBox.className = 'pop-more-box'; moreBox.append(ren, del);
+  more.append(mSum, moreBox);
+  const refit = () => { if (buildingPop) buildingPop.update(); };
+  statusPick.addEventListener('toggle', refit); more.addEventListener('toggle', refit);
+  if (canEdit) box.append(t, meta, statusPick, ...(e.remarks ? [rem] : []), gm, remBtn, more);
   else box.append(t, meta, status, ...(e.remarks ? [rem] : []), gm);
   if (buildingPop && map.hasLayer(buildingPop)) buildingPop.setLatLng(latlng).setContent(box);
   else buildingPop = L.popup(POPUP_OPTS).setLatLng(latlng).setContent(box).openOn(map);
