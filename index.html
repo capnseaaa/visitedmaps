@@ -118,6 +118,10 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .item{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
 .item:last-child{border-bottom:0}
 .item .sw{width:14px;height:14px;border-radius:50%;flex:none}
+.sw-pick{position:relative;display:flex;align-items:center;gap:2px;flex:none;padding:6px 4px 6px 0;cursor:pointer}
+.sw-pick .sw{width:18px;height:18px;box-shadow:0 0 0 2px var(--panel),0 0 0 3px var(--line)}
+.sw-pick b{font-size:10px;color:var(--muted);font-weight:400}
+.sw-pick select{position:absolute;inset:0;opacity:0;font-size:16px;width:100%;cursor:pointer}
 .item span{flex:1;min-width:0;overflow-wrap:anywhere}
 .item small{display:block;color:var(--muted);font-size:12px}
 .item button{font-size:13px;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
@@ -170,10 +174,10 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .card .go{width:100%;font-size:16px;padding:13px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:700}
 
 /* Map popups follow the theme */
-/* New building flash: translucent red outline, three pulses, then fades out. */
-.flash-new{animation:flashNew 2.6s ease-in-out forwards;pointer-events:none}
-@keyframes flashNew{0%{opacity:0}12%{opacity:.75}28%{opacity:.15}44%{opacity:.75}60%{opacity:.15}76%{opacity:.75}100%{opacity:0}}
-@media (prefers-reduced-motion:reduce){.flash-new{animation:flashFade 2.6s ease-out forwards}}
+/* Flash on a building (new, already there, or picked in the list): red outline, three pulses, holds, then fades (4.5 s). */
+.flash-new{animation:flashNew 4.5s ease-in-out forwards;pointer-events:none}
+@keyframes flashNew{0%{opacity:0}8%{opacity:.85}20%{opacity:.2}32%{opacity:.85}44%{opacity:.2}56%{opacity:.85}85%{opacity:.85}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.flash-new{animation:flashFade 4.5s ease-out forwards}}
 @keyframes flashFade{0%,60%{opacity:.7}100%{opacity:0}}
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--fg);box-shadow:var(--shadow)}
 .leaflet-popup-content-wrapper{border-radius:var(--r)}
@@ -381,6 +385,22 @@ const STATUSES = [
 ];
 const SWATCHES = STATUSES.map(s => s.color);
 const statusOf = e => STATUSES.find(s => s.color === String(e.color || STATUSES[0].color).toLowerCase()) || { color: e.color, name: 'Other colour' };
+// Saves a new status (colour) for a building. Green is stored as null.
+async function setStatusColor(e, c){
+  const color = c === STATUSES[0].color ? null : c;
+  const { error } = await db.from(TABLE).update({ color }).eq('id', e.id);
+  if (error) { setStatus(dbErr(error), true); return false; }
+  e.color = color || undefined; render(false);
+  setStatus('“' + tidyName(e.label) + '” is now ' + statusOf(e).name + '.');
+  return true;
+}
+// Names: full-width Latin letters and digits (Ｐｒａｔｉｎｕｍ) to normal ones, single spaces.
+const tidyName = t => String(t || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+  .replace(/\u3000/g, ' ').replace(/\s+/g, ' ').trim();
+// Placeholder names that a real name may replace.
+const isPlaceholderName = t => !t || looksLikeNoName(t) || /の建物$|^名称不明|^Unnamed building$|^Building in /i.test(t);
+// A real building name (not coordinates, a code, a link or an address).
+const isRealName = t => !!t && !isPlaceholderName(t) && !/[都道府県]|[市区町村]\S*\d|丁目|番地?|号$|^\d|\d+-\d+/.test(t);
 function entryAt(latlng){
   const pt = turf.point([latlng.lng, latlng.lat]);
   let best = null, bestArea = Infinity;
@@ -401,15 +421,10 @@ function buildingPopup(e, latlng){
   // Keep touches and keys inside the popup away from the map. Otherwise the map starts a drag on
   // touch, which blocks typing in the remarks box on iPhones.
   L.DomEvent.on(box, 'pointerdown touchstart mousedown keydown keypress keyup', L.DomEvent.stopPropagation);
-  const t = document.createElement('div'); t.className = 'pop-title'; t.textContent = e.label;
+  const t = document.createElement('div'); t.className = 'pop-title'; t.textContent = tidyName(e.label);
   const row = document.createElement('div'); row.className = 'statuses';
   const current = statusOf(e);
-  const pick = async c => {
-    const color = c === STATUSES[0].color ? null : c;
-    const { error } = await db.from(TABLE).update({ color }).eq('id', e.id);
-    if (error) { setStatus(dbErr(error), true); return; }
-    e.color = color || undefined; render(false); buildingPopup(e, latlng);
-  };
+  const pick = async c => { if (await setStatusColor(e, c)) buildingPopup(e, latlng); };
   for (const st of STATUSES) {
     if (st.color === current.color) continue;   // the current status is shown in the folded line
     const s = document.createElement('button'); s.type = 'button'; s.className = 'status-btn';
@@ -438,10 +453,11 @@ function buildingPopup(e, latlng){
   meta.textContent = [e.date, e.by ? 'added by ' + e.by.split('@')[0] : ''].filter(Boolean).join(' · ');
   const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'pop-del'; ren.style.color = 'var(--fg)'; ren.textContent = 'Rename';
   ren.onclick = async () => {
-    const v = prompt('Building name', e.label); if (v == null || !v.trim() || v.trim() === e.label) return;
-    const { error } = await db.from(TABLE).update({ label: v.trim() }).eq('id', e.id);
+    const raw = prompt('Building name', tidyName(e.label)); const v = tidyName(raw);
+    if (raw == null || !v || v === e.label) return;
+    const { error } = await db.from(TABLE).update({ label: v }).eq('id', e.id);
     if (error) { setStatus(dbErr(error), true); return; }
-    e.label = v.trim(); render(false); buildingPopup(e, latlng); setStatus('Renamed.');
+    e.label = v; render(false); buildingPopup(e, latlng); setStatus('Renamed.');
   };
   // Opens Google Maps (the app on a phone, if installed) at this building.
   const gm = document.createElement('a'); gm.className = 'pop-gmaps'; gm.target = '_blank'; gm.rel = 'noopener';
@@ -492,16 +508,29 @@ function renderList(){
   entries.slice().reverse().forEach(e => {
     const row = document.createElement('div'); row.className = 'item';
     const sw = document.createElement('i'); sw.className = 'sw'; sw.style.background = e.color || fillColor;
-    row.appendChild(sw);
+    if (canEdit) {
+      // Editors tap the circle to change the status (the phone's own picker opens).
+      const wrap = document.createElement('label'); wrap.className = 'sw-pick'; wrap.title = 'Change status';
+      const sel = document.createElement('select'); sel.setAttribute('aria-label', 'Status of ' + tidyName(e.label));
+      const cur = statusOf(e);
+      for (const st of STATUSES) { const o = new Option(st.name, st.color); o.selected = st.color === cur.color; sel.add(o); }
+      if (!STATUSES.some(st => st.color === cur.color)) sel.add(new Option('Other colour', cur.color, true, true));
+      sel.onchange = async () => { const prev = cur.color; if (!(await setStatusColor(e, sel.value))) sel.value = prev; };
+      const caret = document.createElement('b'); caret.textContent = '▾';
+      wrap.append(sw, caret, sel); row.appendChild(wrap);
+    } else row.appendChild(sw);
     const t = document.createElement('span');
-    t.textContent = e.label + ' ';
+    t.textContent = tidyName(e.label) + ' ';
     // The coloured circle on the left and the legend above already show the status.
     const d = document.createElement('small');
     d.textContent = [e.date, e.approx ? 'no outline found' : '', e.by ? 'by ' + e.by.split('@')[0] : ''].filter(Boolean).join(' · ');
     t.appendChild(d);
     if (e.remarks) { const r = document.createElement('small'); r.className = 'remarks'; r.textContent = e.remarks; t.appendChild(r); }
     const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Show';
-    go.onclick = () => { closeSheets(); map.setView([e.lat, e.lng], 18); };
+    go.onclick = () => {   // centre on the building and flash it red, after the list closes and the map regains its size
+      closeSheets();
+      setTimeout(() => { map.invalidateSize({ pan: false }); flashBuilding(e.coords); }, 60);
+    };
     const del = document.createElement('button'); del.type = 'button'; del.textContent = 'Remove';
     del.onclick = () => {
       if (del.dataset.armed) removeEntry(e);
@@ -550,6 +579,7 @@ async function expandShortLink(url){
 }
 function parseGoogleLink(text){
   if (!/google\.[a-z.]+\/maps|maps\.google\.|goo\.gl/i.test(text)) return null;
+  text = text.replace(/(\S)(https?:\/\/)/gi, '$1 $2');   // two links pasted back to back: split them
   const short = text.match(SHORT_LINK);
   if (short) return { short: short[0] };
   let s = text; try { s = decodeURIComponent(text); } catch (e) {}
@@ -814,7 +844,8 @@ async function gsiBuilding(lat, lng){
   const gl = glMap();
   if (!gl) return null;
   // Building shapes are only in the most detailed tiles, so look closely at the spot first.
-  if (map.getZoom() < 16 || !map.getBounds().contains([lat, lng])) map.setView([lat, lng], Math.max(17, Math.round(map.getZoom())), { animate: false });
+  // (Leaflet zoom 17 = the base map's most detailed tiles; at 16 some buildings are missing.)
+  if (map.getZoom() < 17 || !map.getBounds().contains([lat, lng])) map.setView([lat, lng], Math.max(17, Math.round(map.getZoom())), { animate: false });
   await glIdle(gl, 6000);
   let feats;
   try { feats = gl.querySourceFeatures('gsi', { sourceLayer: 'BldA' }); } catch (e) { return null; }
@@ -948,12 +979,23 @@ async function addBuilding(g){
   const reverse = looksLikeNoName(g.label) ? nominatimReverse(g.lat, g.lng).catch(() => null) : null;
   const b = await findBuilding(g.lat, g.lng);
   // Already on the map: show that building (flash + its card) so it is clear what happened.
-  const alreadyThere = e => {
+  const alreadyThere = async e => {
     map.setView([g.lat, g.lng], 18);
     flashBuilding(e.coords);
     const c = shapeCentre(e.coords);
+    // The building has no real name yet and this entry brings one: fill it in.
+    const newName = tidyName(g.label);
+    if (isPlaceholderName(e.label) && isRealName(newName)) {
+      const { error } = await db.from(TABLE).update({ label: newName }).eq('id', e.id);
+      if (!error) {
+        const old = e.label; e.label = newName; render(false);
+        buildingPopup(e, L.latLng(c || [e.lat, e.lng]));
+        setStatus('Already on the map. Renamed “' + old + '” to “' + newName + '”.');
+        return false;
+      }
+      setStatus(dbErr(error), true);
+    } else setStatus('Already on the map as “' + (tidyName(e.label) || 'a building') + '”.');
     buildingPopup(e, L.latLng(c || [e.lat, e.lng]));
-    setStatus('Already on the map as “' + (e.label || 'a building') + '”.');
     return false;
   };
   const sameWay = b && b.id != null && entries.find(e => e.wayId === b.id);
@@ -971,7 +1013,7 @@ async function addBuilding(g){
   setStatus('Getting the building name…');
   const name = await buildingName(g.lat, g.lng, b ? b.tags : {}, g.label, b ? b.coords : null, reverse);
   const entry = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), wayId: b ? b.id : null,
-    label: name, lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) };
+    label: tidyName(name), lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) };
   setStatus('Saving…');
   const { data, error } = await db.from(TABLE).insert(toRow(entry)).select().single();
   if (error) { setStatus(dbErr(error), true); map.setView([g.lat, g.lng], 18); return false; }
@@ -996,7 +1038,7 @@ function flashBuilding(coords){
       interactive: false,
       style: { color: '#e5322d', weight: 6, opacity: 1, fill: true, fillColor: '#e5322d', fillOpacity: .12, className: 'flash-new' }
     }).addTo(map);
-    setTimeout(() => map.removeLayer(layer), 2700);
+    setTimeout(() => map.removeLayer(layer), 4600);
   } catch (e) {}
 }
 
