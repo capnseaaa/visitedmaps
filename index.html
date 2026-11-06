@@ -65,6 +65,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
     <span class="count" id="count">0 buildings</span>
     <button id="listBtn" type="button">List</button>
     <button id="exportBtn" type="button">Export</button>
+    <button id="kmlBtn" type="button">KML</button>
     <button id="importBtn" type="button">Import</button>
     <input id="importFile" type="file" accept="application/json,.json">
   </div>
@@ -90,20 +91,25 @@ const css = getComputedStyle(document.documentElement);
 const fillColor = css.getPropertyValue('--fill').trim() || '#2f8f6b';
 let layer = null;
 
-function render(fit){
-  if (layer) { map.removeLayer(layer); layer = null; }
-  document.getElementById('count').textContent = entries.length + (entries.length === 1 ? ' building' : ' buildings');
-  renderList();
-  if (!entries.length) return;
-  // Buildings that touch are merged, but only with others of the same colour.
+// Buildings that touch are merged, but only with others of the same colour.
+function mergedGroups(defaultColor){
   const groups = new Map();
   for (const e of entries) {
-    const c = e.color || fillColor;
+    const c = e.color || defaultColor;
     let f = turf.polygon(e.coords);
     try { f = turf.buffer(f, GAP_METERS, { units: 'meters' }) || f; } catch (err) {}
     const prev = groups.get(c);
     try { groups.set(c, prev ? (turf.union(prev, f) || prev) : f); } catch (err) { /* skip a bad shape */ }
   }
+  return groups;
+}
+
+function render(fit){
+  if (layer) { map.removeLayer(layer); layer = null; }
+  document.getElementById('count').textContent = entries.length + (entries.length === 1 ? ' building' : ' buildings');
+  renderList();
+  if (!entries.length) return;
+  const groups = mergedGroups(fillColor);
   layer = L.featureGroup();
   for (const [c, shape] of groups)
     L.geoJSON(shape, { style: { color: c, weight: 1, fillColor: c, fillOpacity: .55 } }).addTo(layer);
@@ -290,14 +296,32 @@ async function geocode(text){
   return { lat, lng, label: q };
 }
 
+// Ask the main Overpass server first. If it has not answered after a short wait,
+// ask two other public servers too, and use whichever answers first.
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter',
+                  'https://overpass.private.coffee/api/interpreter'];
+const HEDGE_MS = 2500;
+async function overpass(query){
+  const ctrls = [];
+  const ask = url => {
+    const c = new AbortController(); ctrls.push(c);
+    return fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), signal: c.signal,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  };
+  let timer, wake;
+  const first = ask(OVERPASS[0]);
+  // Ask the others after HEDGE_MS, or at once if the main server fails.
+  const later = new Promise(res => { wake = res; timer = setTimeout(res, HEDGE_MS); })
+    .then(() => Promise.any(OVERPASS.slice(1).map(ask)));
+  first.catch(() => wake());
+  try { return await Promise.any([first, later]); }
+  catch (e) { throw new Error('The building lookup is busy. Wait a minute and try again.'); }
+  finally { clearTimeout(timer); ctrls.forEach(c => c.abort()); }
+}
+
 async function findBuilding(lat, lng){
-  const query = `[out:json][timeout:25];way["building"](around:30,${lat},${lng});out geom;`;
-  const r = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST', body: 'data=' + encodeURIComponent(query),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-  });
-  if (!r.ok) throw new Error('The building lookup is busy. Wait a minute and try again.');
-  const data = await r.json();
+  const data = await overpass(`[out:json][timeout:15];way["building"](around:30,${lat},${lng});out geom;`);
   const pt = turf.point([lng, lat]);
   let best = null, bestDist = Infinity;
   for (const w of data.elements || []) {
@@ -367,6 +391,34 @@ document.getElementById('exportBtn').onclick = () => {
   a.download = 'visited-buildings-' + new Date().toISOString().slice(0, 10) + '.json';
   document.body.appendChild(a); a.click(); a.remove();
   setStatus('Backup saved.');
+};
+// KML for Google My Maps / Google Earth: one area per merged shape, in its colour.
+document.getElementById('kmlBtn').onclick = () => {
+  if (!entries.length) { setStatus('Add a building first.', true); return; }
+  const esc = t => String(t).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const kmlColor = (hex, alpha) => alpha + hex.slice(5, 7) + hex.slice(3, 5) + hex.slice(1, 3);   // aabbggrr
+  const ring = r => r.map(([x, y]) => x.toFixed(7) + ',' + y.toFixed(7) + ',0').join(' ');
+  let styles = '', marks = '', n = 0;
+  for (const [c, shape] of mergedGroups(SWATCHES[0])) {
+    const id = 's' + c.slice(1);
+    styles += `<Style id="${id}"><LineStyle><color>${kmlColor(c, 'ff')}</color><width>1</width></LineStyle>` +
+              `<PolyStyle><color>${kmlColor(c, '8c')}</color></PolyStyle></Style>\n`;
+    const g = shape.geometry;
+    for (const poly of g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates]) {
+      n++;
+      marks += `<Placemark><name>Area ${n}</name><styleUrl>#${id}</styleUrl><Polygon>` +
+        `<outerBoundaryIs><LinearRing><coordinates>${ring(poly[0])}</coordinates></LinearRing></outerBoundaryIs>` +
+        poly.slice(1).map(h => `<innerBoundaryIs><LinearRing><coordinates>${ring(h)}</coordinates></LinearRing></innerBoundaryIs>`).join('') +
+        `</Polygon></Placemark>\n`;
+    }
+  }
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document>` +
+    `<name>${esc('Visited buildings ' + new Date().toISOString().slice(0, 10))}</name>\n${styles}${marks}</Document></kml>\n`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }));
+  a.download = 'visited-buildings-' + new Date().toISOString().slice(0, 10) + '.kml';
+  document.body.appendChild(a); a.click(); a.remove();
+  setStatus('KML saved with ' + n + (n === 1 ? ' area.' : ' areas.'));
 };
 document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
 document.getElementById('importFile').onchange = async ev => {
