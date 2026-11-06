@@ -205,7 +205,7 @@ function validLatLng(lat, lng){ return isFinite(lat) && isFinite(lng) && Math.ab
 function parseGoogleLink(text){
   if (!/google\.[a-z.]+\/maps|maps\.google\.|goo\.gl/i.test(text)) return null;
   if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(text))
-    throw new Error('Short Google links cannot be read. In Google Maps, copy the Plus Code instead, or long-press the building on this map.');
+    throw new Error('Short Google links cannot be read when pasted. Share them to the "Add to Visited Map" Shortcut instead, or long-press the building on this map.');
   let s = text; try { s = decodeURIComponent(text); } catch (e) {}
   const num = '(-?\\d{1,3}(?:\\.\\d+)?)';
   const pats = [
@@ -438,6 +438,18 @@ document.getElementById('importFile').onchange = async ev => {
 };
 
 render(true);
+
+// Add from the page address, e.g. ...visitedmaps/?add=<Google Maps link, Plus Code or coordinates>.
+// An iPhone Shortcut can expand a short Google link and open the page this way.
+(function addFromUrl(){
+  let text = null;
+  try { text = new URLSearchParams(location.search).get('add'); } catch (e) {}
+  if (!text || !text.trim()) return;
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}   // a reload will not add it twice
+  const input = document.getElementById('addr');
+  input.value = text.trim();
+  document.getElementById('addForm').requestSubmit();
+})();
 </script>
 </body>
 </html>
