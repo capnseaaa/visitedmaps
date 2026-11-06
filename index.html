@@ -869,13 +869,21 @@ async function addBuilding(g){
   // Start the name lookup now so it runs while the outline is found.
   const reverse = looksLikeNoName(g.label) ? nominatimReverse(g.lat, g.lng).catch(() => null) : null;
   const b = await findBuilding(g.lat, g.lng);
-  if (b && b.id != null && entries.some(e => e.wayId === b.id)) { setStatus('That building is already on the map.'); map.setView([g.lat, g.lng], 18); return false; }
+  // Already on the map: show that building (flash + its card) so it is clear what happened.
+  const alreadyThere = e => {
+    map.setView([g.lat, g.lng], 18);
+    flashBuilding(e.coords);
+    buildingPopup(e, L.latLng(e.lat, e.lng));
+    setStatus('Already on the map as “' + (e.label || 'a building') + '”.');
+    return false;
+  };
+  const sameWay = b && b.id != null && entries.find(e => e.wayId === b.id);
+  if (sameWay) return alreadyThere(sameWay);
   if (b) {
     try {
       const mid = turf.pointOnFeature(turf.polygon(b.coords));
-      if (entries.some(e => { try { return turf.booleanPointInPolygon(mid, turf.polygon(e.coords)); } catch (x) { return false; } })) {
-        setStatus('That building is already on the map.'); map.setView([g.lat, g.lng], 18); return false;
-      }
+      const hit = entries.find(e => { try { return turf.booleanPointInPolygon(mid, turf.polygon(e.coords)); } catch (x) { return false; } });
+      if (hit) return alreadyThere(hit);
     } catch (x) {}
   }
   let coords, approx = false;
