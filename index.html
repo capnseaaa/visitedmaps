@@ -34,7 +34,7 @@
     --shadow:0 2px 12px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.35); color-scheme:dark; }
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
 body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;
   display:flex;flex-direction:column;-webkit-tap-highlight-color:transparent}
 svg.i{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -703,8 +703,23 @@ document.getElementById('addForm').addEventListener('submit', ev => {
   const text = input.value.trim();
   if (!requireEditor()) return;
   if (!text) { input.focus(); setStatus('Type an address, paste a link, or long-press the map.'); return; }
+  input.blur();   // close the phone keyboard while the lookup runs
   runAdd(() => geocode(text), () => { input.value = ''; });
 });
+
+// The page never scrolls; the map pans instead. iPhone browsers can leave the page pushed up after
+// the keyboard closes, hiding the search bar at the top and showing an empty strip at the bottom.
+function resetPageScroll(){
+  const a = document.activeElement;
+  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;   // keyboard still open
+  if (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop) {
+    window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0;
+  }
+}
+document.addEventListener('focusout', () => setTimeout(resetPageScroll, 60));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => setTimeout(resetPageScroll, 60));
+window.addEventListener('orientationchange', () => setTimeout(resetPageScroll, 300));
+window.addEventListener('pageshow', resetPageScroll);
 
 // Long-press (or right-click) the map to add the building there.
 map.on('contextmenu', e => {
