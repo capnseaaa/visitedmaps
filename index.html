@@ -7,6 +7,11 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script src="basemap.js"></script>
 <style>
 :root{
   --bg:#f6f7f5; --panel:#ffffff; --fg:#1d2420; --muted:#66706a; --line:#d9ded9;
@@ -80,12 +85,10 @@ let entries = [];
 try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { entries = []; }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {} }
 
-const map = L.map('map', { zoomControl: false }).setView([34.6913, 135.1830], 15);
+const map = L.map('map', { zoomControl: false, maxZoom: 20 }).setView([34.6913, 135.1830], 15);
 L.control.zoom({ position: 'topright' }).addTo(map);
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
-  maxNativeZoom: 18, maxZoom: 20,
-  attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a> · Buildings © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'
-}).addTo(map);
+addBasemap(map);
+map.attributionControl.addAttribution('Building outlines © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>');
 
 const css = getComputedStyle(document.documentElement);
 const fillColor = css.getPropertyValue('--fill').trim() || '#2f8f6b';
