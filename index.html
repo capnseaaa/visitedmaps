@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Visited Buildings</title>
+<meta name="theme-color" content="#1f6f52">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Visited">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
@@ -14,60 +22,133 @@
 <script src="basemap.js"></script>
 <style>
 :root{
-  --bg:#f6f7f5; --panel:#ffffff; --fg:#1d2420; --muted:#66706a; --line:#d9ded9;
-  --fill:#2f8f6b; --accent:#1f6f52; --err:#b3412f;
-  color-scheme:light;
+  --bg:#f4f5f3; --panel:#ffffff; --fg:#1b221e; --muted:#69736d; --line:#e2e6e2; --chip:#ffffff;
+  --fill:#2f8f6b; --accent:#1f6f52; --accent-fg:#ffffff; --err:#b3412f;
+  --shadow:0 2px 10px rgba(20,30,25,.14), 0 1px 3px rgba(20,30,25,.10);
+  --r:14px; color-scheme:light;
 }
 @media (prefers-color-scheme:dark){
-  :root{ --bg:#121614; --panel:#1b211e; --fg:#e8ece9; --muted:#9aa49e; --line:#2c3430;
-    --fill:#3fbf8f; --accent:#5fd3a6; --err:#e07a66; color-scheme:dark; }
+  :root{ --bg:#121614; --panel:#1c2220; --fg:#e9eeeb; --muted:#9ba59f; --line:#2d3531; --chip:#1c2220;
+    --fill:#3fbf8f; --accent:#4cc79a; --accent-fg:#0d1a14; --err:#e8836f;
+    --shadow:0 2px 12px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.35); color-scheme:dark; }
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;
+  display:flex;flex-direction:column;-webkit-tap-highlight-color:transparent}
+svg.i{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+button{font:inherit;color:inherit;cursor:pointer}
+button:disabled{opacity:.5}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Map stage: the map fills it; controls float on top. */
+#stage{position:relative;flex:1;min-height:0}
+#map{position:absolute;inset:0;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+
 /* Credits: collapsed to the word "Credits"; tap to see all of them. */
 .leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.4;padding:1px 6px;max-width:calc(100vw - 24px);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.75);color:#555;cursor:pointer;border-top-left-radius:6px}
 .leaflet-container .leaflet-control-attribution.open{white-space:normal;background:rgba(255,255,255,.95)}
-/* Collapsed: hide every credit and show only the word "Credits". */
 .leaflet-container .leaflet-control-attribution:not(.open){font-size:0;padding:2px 8px;border-radius:6px 0 0 0}
 .leaflet-container .leaflet-control-attribution:not(.open)::before{content:"Credits";font-size:10px;color:#444}
-#map{flex:1;min-height:0;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
-.panel{background:var(--panel);border-top:1px solid var(--line);
-  padding:12px max(14px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
-  display:flex;flex-direction:column;gap:8px}
-.row{display:flex;gap:8px}
-input[type=text]{flex:1;min-width:0;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
-button{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-button:disabled{opacity:.5}
-button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-#status{font-size:13px;color:var(--muted);min-height:1.2em}
+
+/* Search bar */
+.topbar{position:absolute;z-index:1000;left:0;right:0;top:0;
+  padding:calc(10px + env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left));pointer-events:none}
+#addForm{pointer-events:auto;display:flex;align-items:center;gap:2px;background:var(--panel);border-radius:999px;
+  box-shadow:var(--shadow);padding:4px 4px 4px 14px;max-width:560px;margin:0 auto}
+#addForm > svg{color:var(--muted)}
+#addr{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:16px;padding:10px 8px;outline:none}
+#addr::placeholder{color:var(--muted)}
+.icon-btn{display:grid;place-items:center;width:42px;height:42px;border-radius:999px;border:0;background:transparent;color:var(--fg);padding:0}
+.icon-btn:active{background:var(--line)}
+#addBtn{background:var(--accent);color:var(--accent-fg)}
+#addBtn:active{filter:brightness(.92)}
+#addBtn.busy svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Toast under the search bar */
+#status{pointer-events:auto;max-width:560px;margin:8px auto 0;background:var(--panel);color:var(--fg);border-radius:12px;
+  box-shadow:var(--shadow);padding:10px 14px;font-size:14px;opacity:0;transform:translateY(-6px);transition:opacity .2s,transform .2s;
+  visibility:hidden}
+#status.show{opacity:1;transform:none;visibility:visible}
 #status.err{color:var(--err)}
-.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--muted)}
-.tools button{padding:6px 10px;font-size:13px}
-.tools .count{margin-right:auto;font-variant-numeric:tabular-nums}
-#list{max-height:30vh;overflow:auto;border-top:1px solid var(--line)}
-#list[hidden]{display:none}
-.item{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+
+/* Bottom controls */
+.bottombar{position:absolute;z-index:1000;left:0;right:0;bottom:24px;display:flex;align-items:flex-end;gap:10px;
+  padding:0 max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left));pointer-events:none}
+.bottombar > *{pointer-events:auto}
+.chip{display:flex;align-items:center;gap:8px;height:44px;padding:0 16px 0 12px;border-radius:999px;border:0;background:var(--chip);
+  color:var(--fg);box-shadow:var(--shadow);font-weight:600;font-size:14px;font-variant-numeric:tabular-nums}
+.chip .dot{width:12px;height:12px;border-radius:50%;background:var(--fill)}
+.spacer{flex:1}
+.fab{width:44px;height:44px;border-radius:999px;border:0;background:var(--chip);color:var(--fg);box-shadow:var(--shadow);display:grid;place-items:center;padding:0}
+.fab-col{display:flex;flex-direction:column;gap:10px}
+
+/* Menu */
+#menu{position:absolute;z-index:1001;right:max(12px,env(safe-area-inset-right));bottom:78px;min-width:220px;background:var(--panel);
+  border-radius:var(--r);box-shadow:var(--shadow);padding:6px;display:flex;flex-direction:column}
+#menu[hidden]{display:none}
+#menu button{display:flex;align-items:center;gap:12px;border:0;background:transparent;text-align:left;padding:11px 12px;border-radius:10px;font-size:15px}
+#menu button:active{background:var(--line)}
+#menu small{display:block;color:var(--muted);font-size:12px}
+#menu hr{border:0;border-top:1px solid var(--line);margin:4px 6px}
+
+/* Bottom sheets (list, photo) sit below the map, so the map shrinks instead of being covered. */
+.sheet{background:var(--panel);border-radius:18px 18px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,.12);
+  padding:8px max(14px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
+  max-height:46vh;overflow:auto;position:relative;z-index:1002}
+.sheet[hidden]{display:none}
+.sheet::before{content:"";display:block;width:36px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 8px}
+.sheet-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.sheet-head h2{flex:1;margin:0;font-size:17px}
+.btn{font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
+#list{display:flex;flex-direction:column}
+.item{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.item:last-child{border-bottom:0}
+.item .sw{width:14px;height:14px;border-radius:50%;flex:none}
 .item span{flex:1;min-width:0;overflow-wrap:anywhere}
-.item small{color:var(--muted)}
-.item button{padding:4px 10px;font-size:12px}
-#importFile{display:none}
-#photoFile{display:none}
-#photoPanel{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:8px;font-size:13px;max-height:40vh;overflow:auto}
+.item small{display:block;color:var(--muted);font-size:12px}
+.item button{font-size:13px;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.empty{color:var(--muted);font-size:14px;padding:12px 0}
+#importFile,#photoFile{display:none}
+#photoPanel{display:flex;flex-direction:column;gap:10px;font-size:14px}
 #photoPanel[hidden]{display:none}
-.ph-head{display:flex;gap:10px;align-items:center}
-.ph-head img{width:56px;height:56px;object-fit:cover;border-radius:6px;flex:none}
+.ph-head{display:flex;gap:12px;align-items:center}
+.ph-head img{width:56px;height:56px;object-fit:cover;border-radius:10px;flex:none}
 .ph-head span{flex:1;color:var(--muted)}
-.ph-head button,.ph-chips button,.ph-results button{padding:6px 10px;font-size:13px}
+.ph-head button,.ph-chips button,.ph-results button{font-size:13px;padding:7px 11px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 .ph-chips{display:flex;flex-wrap:wrap;gap:6px}
+.ph-chips button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
 .ph-search{display:flex;gap:6px}
-.ph-search input{flex:1;min-width:0;font:inherit;font-size:16px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+.ph-search input{flex:1;min-width:0;font:inherit;font-size:16px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+.ph-search button{font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 .ph-results{display:flex;flex-direction:column}
-.ph-results div{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.ph-results div{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
 .ph-results span{flex:1;min-width:0;overflow-wrap:anywhere}
 .ph-results small{color:var(--muted)}
+
+/* Welcome card */
+#welcome{position:fixed;inset:0;z-index:2000;background:rgba(10,20,15,.45);display:grid;place-items:end center;
+  padding:16px max(16px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+#welcome[hidden]{display:none}
+.card{background:var(--panel);color:var(--fg);border-radius:22px;box-shadow:var(--shadow);padding:22px 20px 18px;width:100%;max-width:440px}
+.card .logo{width:52px;height:52px;border-radius:14px;display:block;margin-bottom:12px}
+.card h1{margin:0 0 4px;font-size:22px}
+.card > p{margin:0 0 16px;color:var(--muted)}
+.ways{list-style:none;margin:0 0 18px;padding:0;display:flex;flex-direction:column;gap:14px}
+.ways li{display:flex;gap:12px;align-items:flex-start}
+.ways .ic{width:36px;height:36px;border-radius:10px;background:var(--bg);display:grid;place-items:center;flex:none;color:var(--accent)}
+.ways b{display:block;font-size:15px}
+.ways span{color:var(--muted);font-size:13px}
+.card .go{width:100%;font-size:16px;padding:13px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:700}
+
+/* Map popups follow the theme */
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--fg);box-shadow:var(--shadow)}
+.leaflet-popup-content-wrapper{border-radius:var(--r)}
+.leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
+.pop button.primary{border:0;background:var(--accent);color:var(--accent-fg);padding:10px 14px;border-radius:10px;font-weight:600}
 .pop{display:flex;flex-direction:column;gap:10px;min-width:200px;font:14px system-ui,-apple-system,sans-serif}
 .pop-title{font-weight:600;overflow-wrap:anywhere}
 .swatches{display:flex;flex-wrap:wrap;gap:8px}
@@ -76,29 +157,58 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .swatch.custom{background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);-webkit-appearance:none;appearance:none}
 .swatch.custom::-webkit-color-swatch-wrapper{padding:0}
 .swatch.custom::-webkit-color-swatch{border:none;border-radius:50%;opacity:0}
-.pop-del{color:#b3412f;background:#fff;border:1px solid #d9ded9;padding:8px 10px;border-radius:8px}
+.pop-del{color:var(--err);background:transparent;border:1px solid var(--line);padding:9px 10px;border-radius:10px}
 </style>
 </head>
 <body>
-<div id="map"></div>
-<div class="panel">
-  <form id="addForm" class="row">
-    <input id="addr" type="text" placeholder="Address, coordinates, Plus Code or Google link" autocomplete="off" aria-label="Address or coordinates">
-    <button id="photoBtn" type="button" aria-label="Add from a photo" title="Add from a photo">📷</button>
-    <button id="addBtn" class="primary" type="submit">Add</button>
-  </form>
-  <div id="status">Tip: long-press the map to add a building there.</div>
-  <input id="photoFile" type="file" accept="image/*">
-  <div id="photoPanel" hidden></div>
-  <div class="tools">
-    <span class="count" id="count">0 buildings</span>
-    <button id="listBtn" type="button">List</button>
-    <button id="exportBtn" type="button">Export</button>
-    <button id="kmlBtn" type="button">KML</button>
-    <button id="importBtn" type="button">Import</button>
-    <input id="importFile" type="file" accept="application/json,.json">
+<div id="stage">
+  <div id="map"></div>
+  <div class="topbar">
+    <form id="addForm" role="search">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="addr" type="text" placeholder="Search or paste a link" autocomplete="off" enterkeyhint="go" aria-label="Address, coordinates, Plus Code or Google Maps link">
+      <button id="photoBtn" class="icon-btn" type="button" aria-label="Add from a photo" title="Add from a photo"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+      <button id="addBtn" class="icon-btn" type="submit" aria-label="Add" title="Add"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    </form>
+    <div id="status" role="status" aria-live="polite"></div>
   </div>
-  <div id="list" hidden></div>
+  <div class="bottombar">
+    <button id="listBtn" class="chip" type="button" aria-label="Show your buildings"><span class="dot"></span><span id="count">0 buildings</span></button>
+    <div class="spacer"></div>
+    <div class="fab-col">
+      <button id="locateBtn" class="fab" type="button" aria-label="Show my location" title="Show my location"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+      <button id="menuBtn" class="fab" type="button" aria-label="More" aria-haspopup="true" title="More"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
+    </div>
+  </div>
+  <div id="menu" hidden>
+    <button id="exportBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Back up<small>Save all buildings to a file</small></span></button>
+    <button id="importBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg><span>Restore<small>Load buildings from a backup file</small></span></button>
+    <button id="kmlBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg><span>Export KML<small>For Google My Maps or Google Earth</small></span></button>
+    <hr>
+    <button id="helpBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/></svg><span>How to add buildings</span></button>
+  </div>
+</div>
+<div id="listSheet" class="sheet" hidden>
+  <div class="sheet-head"><h2>Your buildings</h2><button id="listClose" class="icon-btn" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div id="list"></div>
+</div>
+<div id="photoSheet" class="sheet" hidden><div id="photoPanel" hidden></div></div>
+<input id="importFile" type="file" accept="application/json,.json">
+<input id="photoFile" type="file" accept="image/*">
+
+<div id="welcome" hidden>
+  <div class="card" role="dialog" aria-labelledby="wTitle">
+    <img class="logo" src="icons/icon-192.png" alt="">
+    <h1 id="wTitle">Visited Buildings</h1>
+    <p>Color in every building you have been to.</p>
+    <ul class="ways">
+      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span><div><b>Search or paste</b><span>An address, coordinates, a Plus Code or a Google Maps link.</span></div></li>
+      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span><div><b>Use a photo</b><span>Pick a photo of the building or its sign.</span></div></li>
+      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4a1.5 1.5 0 0 1 3 0v7.5M14 11.5V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.5 14a1.5 1.5 0 0 1 2.5-1.6L8 15"/></svg></span><div><b>Long-press the map</b><span>Hold on any building to add it.</span></div></li>
+      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 12l7-5M12 12v9M12 12L5 7"/></svg></span><div><b>Tap a building</b><span>Change its color or remove it.</span></div></li>
+    </ul>
+    <button id="welcomeGo" class="go" type="button">Start</button>
+  </div>
 </div>
 
 <script>
@@ -110,7 +220,6 @@ try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { ent
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {} }
 
 const map = L.map('map', { zoomControl: false, maxZoom: 20 }).setView([34.6913, 135.1830], 15);
-L.control.zoom({ position: 'topright' }).addTo(map);
 // Keep the map's idea of its size right when the panel below grows or shrinks (photo panel, list).
 try { new ResizeObserver(() => map.invalidateSize({ pan: false })).observe(document.getElementById('map')); } catch (e) {}
 addBasemap(map);
@@ -156,6 +265,8 @@ function render(fit){
 }
 
 // Tap a building to recolour or remove it.
+// Keep popups clear of the floating search bar and bottom buttons.
+const POPUP_OPTS = { autoPanPaddingTopLeft: L.point(12, 96), autoPanPaddingBottomRight: L.point(70, 90) };
 const SWATCHES = ['#2f8f6b', '#2f6fd0', '#d0442f', '#e08a1e', '#e2c12b', '#8a4fc4', '#d0508f', '#6b7280'];
 function entryAt(latlng){
   const pt = turf.point([latlng.lng, latlng.lat]);
@@ -197,21 +308,24 @@ function buildingPopup(e, latlng){
   };
   box.append(t, row, del);
   if (buildingPop && map.hasLayer(buildingPop)) buildingPop.setLatLng(latlng).setContent(box);
-  else buildingPop = L.popup().setLatLng(latlng).setContent(box).openOn(map);
+  else buildingPop = L.popup(POPUP_OPTS).setLatLng(latlng).setContent(box).openOn(map);
 }
 map.on('click', ev => { const e = entryAt(ev.latlng); if (e) buildingPopup(e, ev.latlng); });
 
 function renderList(){
   const box = document.getElementById('list');
   box.innerHTML = '';
+  if (!entries.length) box.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No buildings yet. Search above, use a photo, or long-press the map.' }));
   entries.slice().reverse().forEach(e => {
     const row = document.createElement('div'); row.className = 'item';
+    const sw = document.createElement('i'); sw.className = 'sw'; sw.style.background = e.color || fillColor;
+    row.appendChild(sw);
     const t = document.createElement('span');
     t.textContent = e.label + ' ';
     const d = document.createElement('small'); d.textContent = e.date + (e.approx ? ' · no outline found' : '');
     t.appendChild(d);
     const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Show';
-    go.onclick = () => map.setView([e.lat, e.lng], 18);
+    go.onclick = () => { closeSheets(); map.setView([e.lat, e.lng], 18); };
     const del = document.createElement('button'); del.type = 'button'; del.textContent = 'Remove';
     del.onclick = () => {
       if (del.dataset.armed) { entries = entries.filter(x => x.id !== e.id); save(); render(false); setStatus('Removed.'); }
@@ -221,9 +335,15 @@ function renderList(){
   });
 }
 
+let statusTimer;
 function setStatus(msg, isErr){
   const s = document.getElementById('status');
-  s.textContent = msg; s.className = isErr ? 'err' : '';
+  clearTimeout(statusTimer);
+  if (!msg) { s.className = ''; document.getElementById('addBtn').classList.remove('busy'); return; }
+  s.textContent = msg; s.className = 'show' + (isErr ? ' err' : '');
+  const busy = /…$/.test(msg);
+  document.getElementById('addBtn').classList.toggle('busy', busy);
+  if (!busy) statusTimer = setTimeout(() => { s.className = s.className.replace('show', '').trim(); }, isErr ? 7000 : 3500);
 }
 
 function normalize(s){
@@ -468,10 +588,43 @@ map.on('contextmenu', e => {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
   b.onclick = () => { map.closePopup(); runAdd(async () => ({ lat, lng, label: lat + ', ' + lng })); };
   box.appendChild(b);
-  L.popup({ closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
+  L.popup({ ...POPUP_OPTS, closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
 });
 
-document.getElementById('listBtn').onclick = () => { const l = document.getElementById('list'); l.hidden = !l.hidden; };
+function closeSheets(){ document.getElementById('listSheet').hidden = true; document.getElementById('photoSheet').hidden = true; }
+document.getElementById('listBtn').onclick = () => {
+  const sh = document.getElementById('listSheet'), open = sh.hidden;
+  closeSheets(); sh.hidden = !open; closeMenu();
+};
+document.getElementById('listClose').onclick = closeSheets;
+
+// Menu
+const menu = document.getElementById('menu');
+function closeMenu(){ menu.hidden = true; }
+document.getElementById('menuBtn').onclick = ev => { ev.stopPropagation(); menu.hidden = !menu.hidden; };
+document.addEventListener('click', ev => { if (!menu.hidden && !menu.contains(ev.target)) closeMenu(); });
+menu.addEventListener('click', ev => { if (ev.target.closest('button')) setTimeout(closeMenu, 0); });
+
+// My location
+let meMarker = null;
+document.getElementById('locateBtn').onclick = () => {
+  if (!navigator.geolocation) { setStatus('This browser cannot share your location.', true); return; }
+  setStatus('Finding you…');
+  navigator.geolocation.getCurrentPosition(pos => {
+    const ll = [pos.coords.latitude, pos.coords.longitude];
+    if (meMarker) meMarker.setLatLng(ll);
+    else meMarker = L.circleMarker(ll, { radius: 7, color: '#fff', weight: 3, fillColor: '#2f7de1', fillOpacity: 1 }).addTo(map);
+    map.setView(ll, 18); setStatus('');
+  }, () => setStatus('Location is off. Allow location for this site in your browser settings.', true),
+  { enableHighAccuracy: true, timeout: 15000 });
+};
+
+// Welcome card: first visit, or from the menu
+const WELCOME = 'visited-buildings-welcomed';
+const welcome = document.getElementById('welcome');
+document.getElementById('welcomeGo').onclick = () => { welcome.hidden = true; try { localStorage.setItem(WELCOME, '1'); } catch (e) {} };
+document.getElementById('helpBtn').onclick = () => { welcome.hidden = false; };
+try { if (!localStorage.getItem(WELCOME) && !new URLSearchParams(location.search).get('add')) welcome.hidden = false; } catch (e) {}
 document.getElementById('exportBtn').onclick = () => {
   const blob = new Blob([JSON.stringify(entries, null, 1)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -592,7 +745,7 @@ async function handlePhoto(file){
   const panel = document.getElementById('photoPanel');
   const note = el('span', { textContent: 'Reading the photo…' });
   const close = el('button', { type: 'button', textContent: 'Close' });
-  close.onclick = () => { panel.hidden = true; panel.replaceChildren(); };
+  close.onclick = () => { panel.hidden = true; panel.replaceChildren(); document.getElementById('photoSheet').hidden = true; };
   const thumb = el('img', { alt: '' }); thumb.src = URL.createObjectURL(file);
   const gpsRow = el('div', { className: 'ph-chips' });
   const chips = el('div', { className: 'ph-chips' });
@@ -602,7 +755,7 @@ async function handlePhoto(file){
   const results = el('div', { className: 'ph-results' });
   form.onsubmit = ev => { ev.preventDefault(); if (query.value.trim()) searchPlaces(query.value.trim(), results); };
   panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, chips, form, results);
-  panel.hidden = false;
+  closeSheets(); panel.hidden = false; document.getElementById('photoSheet').hidden = false;
   photoRef = null;
 
   // Location stored in the photo.
