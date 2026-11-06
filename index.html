@@ -877,7 +877,8 @@ async function addBuilding(g){
   const alreadyThere = e => {
     map.setView([g.lat, g.lng], 18);
     flashBuilding(e.coords);
-    buildingPopup(e, L.latLng(e.lat, e.lng));
+    const c = shapeCentre(e.coords);
+    buildingPopup(e, L.latLng(c || [e.lat, e.lng]));
     setStatus('Already on the map as “' + (e.label || 'a building') + '”.');
     return false;
   };
@@ -907,9 +908,16 @@ async function addBuilding(g){
   return true;
 }
 
+// Centre of a building outline (a point inside it), as [lat, lng].
+function shapeCentre(coords){
+  try { const c = turf.pointOnFeature(turf.polygon(coords)).geometry.coordinates; return [c[1], c[0]]; } catch (e) { return null; }
+}
 // A red outline that flashes a few times over a building just added on this device, then goes.
+// The map is centred on it so it is always in view.
 function flashBuilding(coords){
   try {
+    const c = shapeCentre(coords);
+    if (c) map.setView(c, Math.max(map.getZoom(), 18));
     const layer = L.geoJSON({ type: 'Polygon', coordinates: coords }, {
       interactive: false,
       style: { color: '#e5322d', weight: 6, opacity: 1, fill: true, fillColor: '#e5322d', fillOpacity: .12, className: 'flash-new' }
@@ -984,6 +992,8 @@ map.on('contextmenu', async e => {
   if (!map.hasLayer(pop)) return;            // popup closed while looking
   const shape = found ? { type: 'Polygon', coordinates: found.coords }
                       : turf.circle([lng, lat], 6, { units: 'meters', steps: 16 }).geometry;
+  const centre = found ? shapeCentre(found.coords) : [lat, lng];
+  if (centre) { pop.setLatLng(centre); map.setView(centre, Math.max(map.getZoom(), 18)); }
   pressMark = L.geoJSON(shape, { interactive: false,
     style: { color: '#e5322d', weight: 4, opacity: .95, fillColor: '#e5322d', fillOpacity: .25 } }).addTo(map);
   info.textContent = found ? 'The building outlined in red will be added.' : 'No outline here. A small red circle will be added.';
