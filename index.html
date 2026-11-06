@@ -179,6 +179,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .pop button.primary{border:0;background:var(--accent);color:var(--accent-fg);padding:10px 14px;border-radius:10px;font-weight:600}
 .pop{display:flex;flex-direction:column;gap:10px;min-width:200px;font:14px system-ui,-apple-system,sans-serif}
 .pop-title{font-weight:600;overflow-wrap:anywhere}
+.press-info{color:var(--muted);font-size:13px;max-width:220px}
 .statuses{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .pop-fold summary{list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none}
 .pop-fold summary::-webkit-details-marker{display:none}
@@ -521,7 +522,10 @@ function setStatus(msg, isErr){
 
 function normalize(s){
   s = s.replace(/[０-９Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/\u3000/g, ' ');
   s = s.replace(/[−－‐―]/g, '-');
+  s = s.replace(/(\d)\s*[ー–—]\s*(?=\d)/g, '$1-');                       // other dashes between numbers
+  s = s.replace(/([\d぀-ヿ一-鿿-])\s+(?=[\d぀-ヿ一-鿿-])/g, '$1');    // spaces inside a Japanese address
   s = s.replace(/^日本[、,\s]*/, '');
   s = s.replace(/〒?\s*\d{3}-\d{4}\s*/, '');
   return s.trim();
@@ -959,15 +963,31 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', () =
 window.addEventListener('orientationchange', () => setTimeout(resetPageScroll, 300));
 window.addEventListener('pageshow', resetPageScroll);
 
-// Long-press (or right-click) the map to add the building there.
-map.on('contextmenu', e => {
+// Long-press (or right-click) the map to add the building there. The building that will be
+// added is outlined in red while the popup is open.
+let pressMark = null;
+const clearPress = () => { if (pressMark) { map.removeLayer(pressMark); pressMark = null; } };
+map.on('contextmenu', async e => {
   if (!requireEditor()) return;
   const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
   const box = document.createElement('div'); box.className = 'pop';
-  const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
-  b.onclick = () => { map.closePopup(); const label = pendingName || lat + ', ' + lng; pendingName = ''; runAdd(async () => ({ lat, lng, label })); };
-  box.appendChild(b);
-  L.popup({ ...POPUP_OPTS, closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
+  const info = document.createElement('div'); info.className = 'press-info'; info.textContent = 'Finding the building…';
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.disabled = true;
+  b.textContent = pendingName ? 'Add as “' + pendingName + '”' : 'Add this building';
+  b.onclick = () => { map.closePopup(); const label = pendingName || lat + ', ' + lng; pendingName = ''; clearArea(); runAdd(async () => ({ lat, lng, label })); };
+  box.append(info, b);
+  clearPress();
+  const pop = L.popup({ ...POPUP_OPTS, closeButton: true, offset: [0, -28] }).setLatLng(e.latlng).setContent(box).openOn(map);
+  pop.on('remove', clearPress);
+  let found = null;
+  try { found = await findBuilding(lat, lng); } catch (x) {}
+  if (!map.hasLayer(pop)) return;            // popup closed while looking
+  const shape = found ? { type: 'Polygon', coordinates: found.coords }
+                      : turf.circle([lng, lat], 6, { units: 'meters', steps: 16 }).geometry;
+  pressMark = L.geoJSON(shape, { interactive: false,
+    style: { color: '#e5322d', weight: 4, opacity: .95, fillColor: '#e5322d', fillOpacity: .25 } }).addTo(map);
+  info.textContent = found ? 'The building outlined in red will be added.' : 'No outline here. A small red circle will be added.';
+  b.disabled = false;
 });
 
 function closeSheets(){ for (const id of ['listSheet', 'photoSheet', 'signInSheet', 'remarksSheet']) document.getElementById(id).hidden = true; }
@@ -1215,6 +1235,13 @@ async function searchPlaces(q, box){
 
 // Name to use for the next long-press, set after Claude finds a building's area but not its spot.
 let pendingName = '';
+// Red dashed circle marking that area until the building is added or the panel is closed.
+let areaMark = null;
+function showArea(lat, lng){
+  clearArea();
+  areaMark = L.circle([lat, lng], { radius: 60, color: '#e5322d', weight: 3, dashArray: '6 6', fillColor: '#e5322d', fillOpacity: .08, interactive: false }).addTo(map);
+}
+function clearArea(){ if (areaMark) { map.removeLayer(areaMark); areaMark = null; } }
 
 // Photo as base64 JPEG, at most 1280 px on the long side (keeps the Claude cost to about 1,200 image tokens).
 async function photoBase64(file){
@@ -1242,7 +1269,7 @@ async function handlePhoto(file){
   const panel = document.getElementById('photoPanel');
   const note = el('span', { textContent: 'Reading the photo…' });
   const close = el('button', { type: 'button', textContent: 'Close' });
-  close.onclick = () => { panel.hidden = true; panel.replaceChildren(); document.getElementById('photoSheet').hidden = true; };
+  close.onclick = () => { panel.hidden = true; panel.replaceChildren(); document.getElementById('photoSheet').hidden = true; clearArea(); };
   const thumb = el('img', { alt: '' }); thumb.src = URL.createObjectURL(file);
   const gpsRow = el('div', { className: 'ph-chips' });
   const aiRow = el('div', { className: 'ph-ai' });
@@ -1254,7 +1281,7 @@ async function handlePhoto(file){
   form.onsubmit = ev => { ev.preventDefault(); if (query.value.trim()) searchPlaces(query.value.trim(), results); };
   panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, aiRow, chips, form, results);
   closeSheets(); panel.hidden = false; document.getElementById('photoSheet').hidden = false;
-  photoRef = null; pendingName = '';
+  photoRef = null; pendingName = ''; clearArea();
   // The name typed or read so far; used by every "add" button below.
   const nameNow = fallback => query.value.trim() || fallback;
 
@@ -1286,7 +1313,8 @@ async function handlePhoto(file){
     note.textContent = r.name || 'No building name on the photo.';
     note.style.color = 'var(--fg)'; note.style.fontWeight = '600';
     const bits = [];
-    if (r.address) bits.push(el('div', { textContent: 'Address: ' + r.address }));
+    const addr = r.address ? normalize(r.address) : '';
+    if (addr) bits.push(el('div', { textContent: 'Address: ' + addr }));
     if (r.source && /^https?:\/\//.test(r.source)) bits.push(el('a', { href: r.source, target: '_blank', rel: 'noopener', textContent: 'Where Claude found it' }));
     if (r.note) bits.push(el('small', { textContent: r.note }));
     if (!gps && r.lat != null && r.lng != null && validLatLng(r.lat, r.lng)) {
@@ -1294,13 +1322,13 @@ async function handlePhoto(file){
       const add = el('button', { type: 'button', className: 'primary', textContent: 'Add at the found location' });
       add.onclick = () => runAdd(async () => ({ lat: r.lat, lng: r.lng, label: nameNow(r.name) }));
       bits.push(add, el('small', { textContent: 'After adding, check it is the right building. Listing pins can be a little off.' }));
-    } else if (!gps && r.address) {
+    } else if (!gps && addr) {
       // A full address (with 番/号) finds the exact spot through GSI; otherwise only the area.
       let spot = null;
       try {
-        const g = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(normalize(r.address)));
+        const g = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(addr));
         const hit = g.ok ? (await g.json())[0] : null;
-        if (hit && /号|番地?\d*$/.test(hit.properties.title) && /\d/.test(r.address.replace(/^.*?[丁目町]/, ''))) {
+        if (hit && /号|番地?\d*$/.test(hit.properties.title) && /\d/.test(addr.replace(/^.*?[丁目町]/, ''))) {
           const [lng, lat] = hit.geometry.coordinates; spot = { lat, lng, title: hit.properties.title };
         }
       } catch (e) {}
@@ -1313,8 +1341,9 @@ async function handlePhoto(file){
         const show = el('button', { type: 'button', className: 'primary', textContent: 'Show the area on the map' });
         show.onclick = async () => {
           try {
-            const g = await geocode(r.address);
-            map.setView([g.lat, g.lng], 18);
+            const g = await geocode(addr);
+            map.setView([g.lat, g.lng], 17);
+            showArea(g.lat, g.lng);
             pendingName = nameNow(r.name);
             setStatus('Long-press the building to add it as “' + pendingName + '”.');
           } catch (e) { setStatus('Could not find that address on the map.', true); }
