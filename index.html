@@ -134,6 +134,8 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .ph-search{display:flex;gap:6px}
 .ph-search input{flex:1;min-width:0;font:inherit;font-size:16px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
 .ph-search button{font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.ph-loading{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.ph-loading i{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
 .ph-ai{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .ph-ai small{color:var(--muted)}
 .ph-ai a{color:var(--accent)}
@@ -640,23 +642,71 @@ async function nominatim(params){
 
 // Google share links often hold only an English address, e.g.
 // "Kōbe Hankyū, 8 Chome-1-8 Onoedori, Chuo Ward, Kobe, Hyogo 651-8511, Japan".
+// Exact spot for a house number near a known area (within 3 km), using GSI's Japanese town names.
+async function gsiHouse(area, chome, blockHouse){
+  const r = await fetch('https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=' + area.lat + '&lon=' + area.lng);
+  let town = r.ok ? ((await r.json()).results || {}).lv01Nm : '';
+  if (!town) return null;
+  // The area point can sit in the next chome over; use the chome number from the address.
+  const KAN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+  if (chome >= 1 && chome <= 10) town = town.replace(/[一二三四五六七八九十]+丁目$/, KAN[chome] + '丁目');
+  const g = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(town + blockHouse));
+  const hits = g.ok ? await g.json() : [];
+  let best = null, bestKm = 3;
+  for (const h of hits) {
+    const [lng, lat] = h.geometry.coordinates;
+    const km = turf.distance(turf.point([area.lng, area.lat]), turf.point([lng, lat]));
+    if (km < bestKm) { best = { lat, lng }; bestKm = km; }
+  }
+  return best;
+}
+
 async function resolveGoogleQuery(q){
   const pc = await parsePlusCode(q);
   if (pc) return pc;
-  const parts = q.split(',').map(t => t.trim()).filter(Boolean);
-  if (parts.length && /^japan$/i.test(parts[parts.length - 1])) parts.pop();
+  q = q.replace(/[−‐―–—]/g, '-');
+  const postcode = (q.match(/\b(\d{3}-\d{4})\b/) || [])[1] || '';
+  let parts = q.split(',').map(t => t.trim()).filter(Boolean);
+  // Google writes Japanese addresses in two orders:
+  //   "Name, 8 Chome-1-8 Onoedori, Chuo Ward, Kobe, Hyogo 651-8511, Japan"
+  //   "Japan, 〒650-0021 Hyogo, Kobe, Chuo Ward, Sannomiyacho, 1 Chome-7-2"   (places with no name)
+  // Drop the country, then put the second order into the first.
+  parts = parts.filter(t => !/^(japan|日本)$/i.test(t));
+  const reversed = parts.length && /^〒?\s*\d{3}-\d{4}/.test(parts[0]);
+  if (reversed) parts = parts.map(t => t.replace(/^〒?\s*\d{3}-\d{4}\s*/, '')).filter(Boolean).reverse();
   const postIdx = parts.findIndex(t => /\d{3}-\d{4}/.test(t));                      // "Hyogo 651-8511"
-  const city = postIdx > 0 ? parts[postIdx - 1] : parts[parts.length - 1] || '';
+  const city = reversed ? (parts[parts.length - 2] || '') : postIdx > 0 ? parts[postIdx - 1] : parts[parts.length - 1] || '';
   const chomeIdx = parts.findIndex(t => /\d+\s*Chome/i.test(t));
-  const name = parts.length > 1 && chomeIdx !== 0 && !/^\d/.test(parts[0]) ? parts[0] : '';
-  // "8 Chome-1-8 Onoedori" -> "Onoedori 8-chome", then add ward and city.
+  // A name is a first part that is not an address piece.
+  const addrPiece = t => /^\d|〒|\bChome\b|\bWard\b|-ku$|\bPrefecture\b|^(Hyogo|Osaka|Kyoto|Tokyo)\b/i.test(t) || t === city;
+  const name = !reversed && parts.length > 1 && chomeIdx !== 0 && !addrPiece(parts[0]) ? parts[0] : '';
+  // "8 Chome-1-8 Onoedori" (or reversed: "1 Chome-7-2" after "Sannomiyacho") -> "Onoedori 8-chome", then ward and city.
   let area = null;
   if (chomeIdx >= 0) {
-    const m = parts[chomeIdx].match(/(\d+)\s*Chome[-\d]*\s+(.+)/i);
-    if (m) {
-      const tail = parts.slice(chomeIdx + 1, postIdx > 0 ? postIdx : undefined).join(', ');
-      const hits = await nominatim({ q: m[2] + ' ' + m[1] + '-chome, ' + tail, limit: 1 });
-      if (hits.length) area = { lat: +hits[0].lat, lng: +hits[0].lon };
+    let m = parts[chomeIdx].match(/(\d+)\s*Chome[-\d]*\s+(.+)/i), town = m && m[2], num = m && m[1];
+    if (!m && reversed) { const n = parts[chomeIdx].match(/(\d+)\s*Chome/i); if (n) { num = n[1]; town = parts[chomeIdx + 1]; } }
+    if (town) {
+      const tail = reversed ? parts.slice(chomeIdx + 2, -1).join(', ')
+                            : parts.slice(chomeIdx + 1, postIdx > 0 ? postIdx : undefined).join(', ');
+      // A Japanese postcode covers one town, so its point is the surest start for the exact
+      // lookup below. Then OpenStreetMap by name (it lacks English names for some towns).
+      if (postcode) {
+        const hits = await nominatim({ postalcode: postcode, limit: 1 });
+        if (hits.length) area = { lat: +hits[0].lat, lng: +hits[0].lon };
+      }
+      if (!area) for (const t of [town + ' ' + num + '-chome, ' + tail, town + ', ' + tail]) {
+        const hits = await nominatim({ q: t, limit: 1 });
+        if (hits.length) { area = { lat: +hits[0].lat, lng: +hits[0].lon }; break; }
+      }
+    }
+    // With block and house numbers ("3 Chome-2-19"), find the exact spot: GSI gives the Japanese
+    // town name at the area ("御幸通三丁目"), then GSI address search finds "御幸通三丁目2-19".
+    const house = parts[chomeIdx].match(/Chome-(\d+)(?:-(\d+))?/i);
+    if (area && house) {
+      try {
+        const spot = await gsiHouse(area, +num, house[1] + (house[2] ? '-' + house[2] : ''));
+        if (spot) return { ...spot, label: name || '' };
+      } catch (e) {}
     }
   }
   if (name) {
@@ -669,7 +719,7 @@ async function resolveGoogleQuery(q){
       return { lat: +hits[0].lat, lng: +hits[0].lon, label: name };
     }
   }
-  if (area) return { ...area, label: name || parts.slice(0, 2).join(', '), note: '', approxNote: true };
+  if (area) return { ...area, label: name || '', note: '', approxNote: true };
   throw new Error('Could not find "' + (name || q) + '". Try the Plus Code, or long-press the building on the map.');
 }
 
@@ -702,6 +752,7 @@ async function geocode(text){
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter',
                   'https://overpass.private.coffee/api/interpreter'];
 const HEDGE_MS = 2500;
+const OVERPASS_MAX_MS = 10000;
 async function overpass(query){
   const ctrls = [];
   const ask = url => {
@@ -716,7 +767,9 @@ async function overpass(query){
   const later = new Promise(res => { wake = res; timer = setTimeout(res, HEDGE_MS); })
     .then(() => Promise.any(OVERPASS.slice(1).map(ask)));
   first.catch(() => wake());
-  try { return await Promise.any([first, later]); }
+  // Give up after OVERPASS_MAX_MS: the servers often hang for a minute or more.
+  const giveUp = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), OVERPASS_MAX_MS));
+  try { return await Promise.race([Promise.any([first, later]), giveUp]); }
   catch (e) { throw new Error('The building lookup is busy. Wait a minute and try again.'); }
   finally { clearTimeout(timer); ctrls.forEach(c => c.abort()); }
 }
@@ -804,8 +857,10 @@ async function gsiBuilding(lat, lng){
 
 async function findBuilding(lat, lng){
   try { const g = await gsiBuilding(lat, lng); if (g) return g; } catch (e) { console.warn('Map outline lookup failed:', e); }
-  setStatus('Finding the building (slow server)…');
-  return osmBuilding(lat, lng);
+  // Not on the base map (pressed on a road or open space, or a very new building): ask OpenStreetMap.
+  setStatus('No outline on the map here. Asking OpenStreetMap (up to 10 s)…');
+  try { return await osmBuilding(lat, lng); }
+  catch (e) { setStatus('OpenStreetMap is not answering, so a small circle is used.'); return null; }
 }
 
 async function osmBuilding(lat, lng){
@@ -1277,7 +1332,7 @@ async function readPhotoWithClaude(file, gps){
 
 async function handlePhoto(file){
   const panel = document.getElementById('photoPanel');
-  const note = el('span', { textContent: 'Reading the photo…' });
+  const note = el('span', { textContent: 'Loading…' });
   const close = el('button', { type: 'button', textContent: 'Close' });
   close.onclick = () => { panel.hidden = true; panel.replaceChildren(); document.getElementById('photoSheet').hidden = true; clearArea(); };
   const thumb = el('img', { alt: '' }); thumb.src = URL.createObjectURL(file);
@@ -1289,7 +1344,7 @@ async function handlePhoto(file){
   const form = el('form', { className: 'ph-search' }, [query, go]);
   const results = el('div', { className: 'ph-results' });
   form.onsubmit = ev => { ev.preventDefault(); if (query.value.trim()) searchPlaces(query.value.trim(), results); };
-  panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, aiRow, chips, form, results);
+  panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, aiRow);   // name search added only for the backup reader
   closeSheets(); panel.hidden = false; document.getElementById('photoSheet').hidden = false;
   photoRef = null; pendingName = ''; clearArea();
   // The name typed or read so far; used by every "add" button below.
@@ -1307,19 +1362,21 @@ async function handlePhoto(file){
       const use = el('button', { type: 'button', className: 'primary', textContent: 'Add building where photo was taken' });
       use.onclick = () => runAdd(async () => ({ lat: gps.lat, lng: gps.lng, label: nameNow('Photo ' + gps.lat.toFixed(5) + ', ' + gps.lng.toFixed(5)) }));
       gpsRow.replaceChildren(use);
-    } else gpsRow.replaceChildren(el('small', { textContent: 'This photo has no location.' }));
-  } catch (e) { gpsRow.replaceChildren(el('small', { textContent: 'Could not read the photo location.' })); }
+    }
+  } catch (e) {}
+  // While Claude works: a spinner instead of a note about the photo location.
+  const loading = el('div', { className: 'ph-loading' }, [el('i'), el('span', { textContent: 'Searching for the building…' })]);
+  if (!gps) gpsRow.replaceChildren(loading); else gpsRow.append(loading);
 
   const showChips = lines => chips.replaceChildren(...lines.map(t => { const b = el('button', { type: 'button', textContent: t });
     b.onclick = () => { query.value = t; searchPlaces(t, results); }; return b; }));
 
   // 1. Claude (Haiku 5.5) reads the sign and, with no photo location, searches the web for the address.
   try {
-    note.textContent = gps ? 'Claude is reading the sign…' : 'Claude is reading the sign and looking up the address (up to about 30 s)…';
     const r = await readPhotoWithClaude(file, gps);
+    loading.remove();
     // Only show choices that lead to a real building: no text chips or name search here.
     if (r.name) query.value = r.name;
-    chips.remove(); form.remove(); results.remove();
     note.textContent = r.name || 'No building name on the photo.';
     note.style.color = 'var(--fg)'; note.style.fontWeight = '600';
     const bits = [];
@@ -1370,7 +1427,9 @@ async function handlePhoto(file){
     aiRow.replaceChildren(...bits);
     return;
   } catch (e) {
+    loading.remove();
     aiRow.replaceChildren(el('small', { textContent: 'Claude photo reader unavailable: ' + e.message + ' Using the basic reader.' }));
+    panel.append(chips, form, results);
   }
 
   // 2. Backup: Tesseract text reader in the browser, then OpenStreetMap name search.
