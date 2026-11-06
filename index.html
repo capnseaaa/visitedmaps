@@ -1275,8 +1275,8 @@ async function handlePhoto(file){
     // Only show choices that lead to a real building: no text chips or name search here.
     if (r.name) query.value = r.name;
     chips.remove(); form.remove(); results.remove();
-    const sure = { high: 'sure', medium: 'fairly sure', low: 'not sure' }[r.confidence] || 'not sure';
-    note.textContent = r.name ? 'Claude read “' + r.name + '” (' + sure + ').' : 'Claude found no building name. Type it below.';
+    note.textContent = r.name || 'No building name on the photo.';
+    note.style.color = 'var(--fg)'; note.style.fontWeight = '600';
     const bits = [];
     if (r.address) bits.push(el('div', { textContent: 'Address: ' + r.address }));
     if (r.source && /^https?:\/\//.test(r.source)) bits.push(el('a', { href: r.source, target: '_blank', rel: 'noopener', textContent: 'Where Claude found it' }));
@@ -1317,7 +1317,7 @@ async function handlePhoto(file){
     if (!gps && !bits.some(x => x.tagName === 'BUTTON')) {
       // Nothing tied to a building: let the editor point at it on the map instead.
       pendingName = r.name || '';
-      bits.push(el('small', { textContent: 'Claude could not find where this building is. ' +
+      bits.push(el('small', { textContent: 'Could not find where this building is. ' +
         (r.name ? 'Long-press it on the map to add it as “' + r.name + '”.' : 'Long-press it on the map to add it.') }));
     }
     aiRow.replaceChildren(...bits);
