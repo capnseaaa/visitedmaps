@@ -88,3 +88,26 @@ do $$ begin
     alter publication supabase_realtime add table public.visited_buildings;
   end if;
 end $$;
+
+-- Photo reader cost log (added later; safe to re-run). One row per Claude call from the
+-- read-photo Edge Function, written with the editor's own sign-in. Only editors can read it.
+create table if not exists public.photo_reader_log (
+  id             bigint generated always as identity primary key,
+  created_at     timestamptz not null default now(),
+  user_email     text default lower(auth.jwt() ->> 'email'),
+  model          text not null default '',
+  input_tokens   integer not null default 0 check (input_tokens >= 0),
+  output_tokens  integer not null default 0 check (output_tokens >= 0),
+  web_searches   integer not null default 0 check (web_searches >= 0)
+);
+alter table public.photo_reader_log enable row level security;
+
+drop policy if exists photo_reader_log_insert on public.photo_reader_log;
+create policy photo_reader_log_insert on public.photo_reader_log
+  for insert to authenticated with check ((select public.is_map_editor()));
+
+drop policy if exists photo_reader_log_read on public.photo_reader_log;
+create policy photo_reader_log_read on public.photo_reader_log
+  for select to authenticated using ((select public.is_map_editor()));
+
+grant select, insert on public.photo_reader_log to authenticated;

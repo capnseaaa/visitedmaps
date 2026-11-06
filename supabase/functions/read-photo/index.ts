@@ -8,6 +8,7 @@
 //
 // Only map editors may call it, because each call costs money.
 // Needs the secret ANTHROPIC_API_KEY (Edge Functions → Secrets). Keep "Verify JWT" on.
+// Logs each call's tokens to public.photo_reader_log (see supabase/visited_buildings.sql).
 
 import Anthropic from 'npm:@anthropic-ai/sdk@1.3.0';
 
@@ -26,6 +27,22 @@ type LatLng = { lat: number; lng: number };
 const isLatLng = (p: unknown): p is LatLng =>
   !!p && typeof p === 'object' && Number.isFinite((p as LatLng).lat) && Number.isFinite((p as LatLng).lng) &&
   Math.abs((p as LatLng).lat) <= 90 && Math.abs((p as LatLng).lng) <= 180;
+
+// Records one call's token use in public.photo_reader_log, as the signed-in editor.
+// The page shows the totals (⋯ menu → Photo reader cost). A failed log never fails the reply.
+type Usage = { input: number; output: number; searches: number };
+async function logUsage(auth: string, u: Usage) {
+  const url = Deno.env.get('SUPABASE_URL'), key = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!url || !key) return;
+  try {
+    const r = await fetch(url + '/rest/v1/photo_reader_log', {
+      method: 'POST',
+      headers: { apikey: key, Authorization: auth, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ model: MODEL, input_tokens: u.input, output_tokens: u.output, web_searches: u.searches }),
+    });
+    await r.body?.cancel();
+  } catch { /* ignore */ }
+}
 
 // True when the caller is signed in and on the map editor list.
 async function isEditor(auth: string | null): Promise<boolean> {
@@ -111,19 +128,25 @@ Deno.serve(async (req) => {
 
   try {
     let res: Anthropic.Message | null = null;
+    const usage: Usage = { input: 0, output: 0, searches: 0 };
     // A web search turn can pause; send it back so the server continues (at most twice).
+    // Every request is billed, so usage is added up over all of them.
     for (let i = 0; i < 3; i++) {
       res = await client.messages.create({ model: MODEL, max_tokens: 4000, messages, ...(tools.length ? { tools } : {}) });
+      const u = res.usage;
+      usage.input += (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
+      usage.output += u?.output_tokens ?? 0;
+      usage.searches += u?.server_tool_use?.web_search_requests ?? 0;
       if (res.stop_reason !== 'pause_turn') break;
       messages.push({ role: 'assistant', content: res.content });
     }
+    await logUsage(req.headers.get('Authorization') ?? '', usage);
     if (!res) throw new Error('No reply.');
     if (res.stop_reason === 'refusal') return reply(422, { error: 'The photo reader declined this photo.' });
     const text = res.content.flatMap(b => (b.type === 'text' ? [b.text] : [])).join('\n');
     const out = parseResult(text);
     if (!out) return reply(502, { error: 'The photo reader gave no usable answer.' });
-    const searches = res.usage?.server_tool_use?.web_search_requests ?? 0;
-    return reply(200, { ...out, usage: { input: res.usage.input_tokens, output: res.usage.output_tokens, searches } });
+    return reply(200, { ...out, usage });
   } catch (e) {
     const msg = e instanceof Anthropic.APIError ? 'Claude API error ' + e.status + ': ' + e.message : (e as Error).message;
     return reply(502, { error: msg });

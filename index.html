@@ -34,6 +34,10 @@
     --shadow:0 2px 12px rgba(0,0,0,.45), 0 1px 3px rgba(0,0,0,.35); color-scheme:dark; }
 }
 *{box-sizing:border-box}
+/* "hidden" always hides, even where a rule sets display (menu buttons were showing anyway). */
+[hidden]{display:none !important}
+/* No double-tap page zoom on phones (two quick taps on a button zoomed the whole page). */
+html{touch-action:manipulation}
 html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
 body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;
   display:flex;flex-direction:column;-webkit-tap-highlight-color:transparent}
@@ -238,6 +242,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   <div id="menu" hidden>
     <button id="exportBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Back up<small>Save all buildings to a file</small></span></button>
     <button id="importBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg><span>Restore<small>Load buildings from a backup file</small></span></button>
+    <button id="costBtn" type="button" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .9 3 2.1-1.3 1.9-3 1.9c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></svg><span>Photo reader cost<small>Claude use from photos, estimated</small></span></button>
     <button id="kmlBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg><span>Export KML<small>For Google My Maps or Google Earth</small></span></button>
     <hr>
     <button id="accountBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="accountText">Sign in to edit<small>Only invited editors can add buildings</small></span></button>
@@ -545,14 +550,14 @@ function renderList(){
 }
 
 let statusTimer;
-function setStatus(msg, isErr){
+function setStatus(msg, isErr, ms){
   const s = document.getElementById('status');
   clearTimeout(statusTimer);
   if (!msg) { s.className = ''; document.getElementById('addBtn').classList.remove('busy'); return; }
   s.textContent = msg; s.className = 'show' + (isErr ? ' err' : '');
   const busy = /…$/.test(msg);
   document.getElementById('addBtn').classList.toggle('busy', busy);
-  if (!busy) statusTimer = setTimeout(() => { s.className = s.className.replace('show', '').trim(); }, isErr ? 7000 : 3500);
+  if (!busy) statusTimer = setTimeout(() => { s.className = s.className.replace('show', '').trim(); }, ms || (isErr ? 7000 : 3500));
 }
 
 function normalize(s){
@@ -1275,9 +1280,32 @@ function updateAccountUi(){
   else t.append(canEdit ? 'Signed in' : 'Signed in (view only)', Object.assign(document.createElement('small'), { textContent: me.email + ' · tap to sign out' }));
   const up = document.getElementById('uploadLocalBtn');
   up.hidden = !(canEdit && localOld.length);
+  document.getElementById('costBtn').hidden = !canEdit;
   document.getElementById('uploadLocalText').textContent = 'Upload ' + localOld.length + (localOld.length === 1 ? ' building' : ' buildings') + ' saved on this device';
   render(false);
 }
+// Photo reader cost: totals from public.photo_reader_log at Claude Haiku 5.5 list prices
+// ($0.10 / $0.50 per million input / output tokens, $0.01 per web search). An estimate;
+// the Anthropic console has the real bill.
+const HAIKU_PRICE = { input: 0.10 / 1e6, output: 0.50 / 1e6, search: 0.01 };
+document.getElementById('costBtn').onclick = async () => {
+  closeMenu();
+  setStatus('Adding up photo reader use…');
+  const { data, error } = await db.from('photo_reader_log').select('created_at,input_tokens,output_tokens,web_searches');
+  if (error) {
+    setStatus(/does not exist|42P01|PGRST205/i.test((error.code || '') + ' ' + (error.message || ''))
+      ? 'The cost log is not set up yet. Run the new part of visited_buildings.sql in Supabase.' : 'Could not read the cost log.', true);
+    return;
+  }
+  const cost = r => r.input_tokens * HAIKU_PRICE.input + r.output_tokens * HAIKU_PRICE.output + r.web_searches * HAIKU_PRICE.search;
+  const month = new Date().toISOString().slice(0, 7);
+  const sum = rows => ({ n: rows.length, usd: rows.reduce((t, r) => t + cost(r), 0) });
+  const all = sum(data || []), now = sum((data || []).filter(r => r.created_at.slice(0, 7) === month));
+  const usd = v => '$' + (v < 0.1 ? v.toFixed(3) : v.toFixed(2));
+  setStatus(all.n ? 'Photo reader: ' + now.n + ' photo' + (now.n === 1 ? '' : 's') + ' this month ≈ ' + usd(now.usd) +
+    '; ' + all.n + ' in total ≈ ' + usd(all.usd) + '. Estimate; the Anthropic console has the exact bill.'
+    : 'No photos logged yet. Photos read before the log was set up are not counted.', false, 12000);
+};
 document.getElementById('accountBtn').onclick = async () => {
   if (!me) { openSignIn(); return; }
   await db.auth.signOut(); setStatus('Signed out.');
