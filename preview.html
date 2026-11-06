@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Map Style Preview</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+html,body{height:100%;margin:0;background:#f6f7f5}
+#map{height:100%}
+#zoom{position:absolute;left:10px;top:10px;z-index:1000;background:#fff;color:#111;padding:6px 10px;border-radius:8px;font:600 16px system-ui;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.leaflet-control-layers-expanded{font:15px system-ui}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="zoom"></div>
+<script>
+const osm = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const styles = {
+  'A. Current (GSI pale)': L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
+    { maxNativeZoom: 18, maxZoom: 20, attribution: '国土地理院' }),
+  'B. CARTO Positron': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    { subdomains: 'abcd', maxZoom: 20, attribution: osm + ' © CARTO' }),
+  'C. CARTO Voyager': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    { subdomains: 'abcd', maxZoom: 20, attribution: osm + ' © CARTO' }),
+  'D. Esri Light Gray': L.layerGroup([
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+      { maxNativeZoom: 16, maxZoom: 20, attribution: 'Esri' }),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+      { maxNativeZoom: 16, maxZoom: 20 })
+  ]),
+  'E. Esri Street Map': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 20, attribution: 'Esri' })
+};
+const map = L.map('map', { layers: [styles['B. CARTO Positron']] }).setView([34.6913, 135.1830], 15);
+L.control.layers(styles, null, { collapsed: false }).addTo(map);
+const z = document.getElementById('zoom');
+const show = () => { z.textContent = 'Zoom ' + map.getZoom(); };
+map.on('zoomend', show); show();
+</script>
+</body>
+</html>
