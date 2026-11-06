@@ -398,9 +398,13 @@ async function setStatusColor(e, c){
 const tidyName = t => String(t || '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   .replace(/\u3000/g, ' ').replace(/\s+/g, ' ').trim();
 // Placeholder names that a real name may replace.
-const isPlaceholderName = t => !t || looksLikeNoName(t) || /の建物$|^名称不明|^Unnamed building$|^Building in /i.test(t);
-// A real building name (not coordinates, a code, a link or an address).
-const isRealName = t => !!t && !isPlaceholderName(t) && !/[都道府県]|[市区町村]\S*\d|丁目|番地?|号$|^\d|\d+-\d+/.test(t);
+// Addresses ("兵庫県神戸市中央区御幸通2丁目1-23") and road names ("葺合南３３号線") are not building names.
+const isAddressLike = t => /[都道府県]|[市区町村]\S*[\d０-９]|丁目|番地?|号$|^[\d０-９]|[\d０-９]+[-－][\d０-９]+/.test(t);
+const isRoadName = t => /[\d０-９]+号線$|^(国道|県道|市道)/.test(t);
+const isPlaceholderName = t => !t || looksLikeNoName(t) || /の建物$|^名称不明|^Unnamed building$|^Building in /i.test(t)
+  || isAddressLike(t) || isRoadName(t);
+// A real building name (not coordinates, a code, a link, an address or a road).
+const isRealName = t => !!t && !isPlaceholderName(t);
 function entryAt(latlng){
   const pt = turf.point([latlng.lng, latlng.lat]);
   let best = null, bestArea = Infinity;
