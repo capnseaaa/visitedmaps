@@ -20,7 +20,7 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column}
-#map{flex:1;min-height:0}
+#map{flex:1;min-height:0;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .panel{background:var(--panel);border-top:1px solid var(--line);
   padding:12px max(14px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
   display:flex;flex-direction:column;gap:8px}
@@ -48,10 +48,10 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 <div id="map"></div>
 <div class="panel">
   <form id="addForm" class="row">
-    <input id="addr" type="text" placeholder="Paste address or 34.69, 135.19" autocomplete="off" aria-label="Address or coordinates">
+    <input id="addr" type="text" placeholder="Address, coordinates, Plus Code or Google link" autocomplete="off" aria-label="Address or coordinates">
     <button id="addBtn" class="primary" type="submit">Add</button>
   </form>
-  <div id="status"></div>
+  <div id="status">Tip: long-press the map to add a building there.</div>
   <div class="tools">
     <span class="count" id="count">0 buildings</span>
     <button id="listBtn" type="button">List</button>
@@ -130,9 +130,97 @@ function normalize(s){
   return s.trim();
 }
 
+function validLatLng(lat, lng){ return isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180; }
+
+// Google Maps links. Short links (maps.app.goo.gl) redirect on Google's side and cannot be read from a web page.
+function parseGoogleLink(text){
+  if (!/google\.[a-z.]+\/maps|maps\.google\.|goo\.gl/i.test(text)) return null;
+  if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(text))
+    throw new Error('Short Google links cannot be read. In Google Maps, copy the Plus Code instead, or long-press the building on this map.');
+  let s = text; try { s = decodeURIComponent(text); } catch (e) {}
+  const num = '(-?\\d{1,3}(?:\\.\\d+)?)';
+  const pats = [
+    new RegExp('!3d' + num + '!4d' + num),                                         // the pin itself
+    new RegExp('[?&](?:q|query|ll|destination|daddr|center)=(?:loc:)?\\s*' + num + '\\s*,\\s*\\+?' + num),
+    new RegExp('/maps/(?:search|place|dir)/(?:[^/]*/)?' + num + ',\\s*\\+?' + num),
+    new RegExp('@' + num + ',' + num)                                               // map view centre
+  ];
+  for (const p of pats) {
+    const m = s.match(p);
+    if (m && validLatLng(+m[1], +m[2])) {
+      const place = s.match(/\/maps\/place\/([^/@]+)/);
+      let label = place && !/^-?\d/.test(place[1]) ? place[1].replace(/\+/g, ' ') : (+m[1]).toFixed(6) + ', ' + (+m[2]).toFixed(6);
+      return { lat: +m[1], lng: +m[2], label };
+    }
+  }
+  throw new Error('That Google link has no location in it. Copy the Plus Code instead.');
+}
+
+// Plus Codes (Open Location Code). Short codes like "MQV2+GW" are placed near a reference point.
+const OLC = '23456789CFGHJMPQRVWX';
+function olcDecode(code){
+  code = code.replace('+', '').toUpperCase();
+  let lat = -90, lng = -180, latSize = 400, lngSize = 400;
+  for (let i = 0; i < Math.min(code.length, 10); i += 2) {
+    latSize /= 20; lngSize /= 20;
+    lat += OLC.indexOf(code[i]) * latSize; lng += OLC.indexOf(code[i + 1]) * lngSize;
+  }
+  for (let i = 10; i < code.length; i++) {
+    const d = OLC.indexOf(code[i]);
+    latSize /= 5; lngSize /= 4;
+    lat += Math.floor(d / 4) * latSize; lng += (d % 4) * lngSize;
+  }
+  return { lat: Math.min(90, lat + latSize / 2), lng: lng + lngSize / 2 };
+}
+function olcPrefix(lat, lng, n){
+  lat = Math.min(Math.max(lat, -90), 89.999999) + 90;
+  lng = ((lng + 180) % 360 + 360) % 360;
+  let s = '', res = 20;
+  for (let i = 0; i < n; i += 2) {
+    const a = Math.floor(lat / res), b = Math.floor(lng / res);
+    s += OLC[a] + OLC[b]; lat -= a * res; lng -= b * res; res /= 20;
+  }
+  return s;
+}
+function olcRecover(code, refLat, refLng){
+  const pad = 8 - code.indexOf('+');
+  if (pad === 0) return olcDecode(code);
+  const res = Math.pow(20, 2 - pad / 2), half = res / 2;
+  const c = olcDecode(olcPrefix(refLat, refLng, pad) + code);
+  let { lat, lng } = c;
+  if (refLat + half < lat && lat - res >= -90) lat -= res;
+  else if (refLat - half > lat && lat + res <= 90) lat += res;
+  if (refLng + half < lng) lng -= res;
+  else if (refLng - half > lng) lng += res;
+  return { lat, lng: ((lng + 180) % 360 + 360) % 360 - 180 };
+}
+async function parsePlusCode(text){
+  const m = text.match(/(?:^|[\s,])([23456789CFGHJMPQRVWX]{4,8}\+[23456789CFGHJMPQRVWX]{2,7})(?=$|[\s,])/i);
+  if (!m) return null;
+  const code = m[1].toUpperCase(), before = code.indexOf('+');
+  if (before % 2 || (before === 8 && (OLC.indexOf(code[0]) > 8 || OLC.indexOf(code[1]) > 17))) return null;
+  let ref = map.getCenter(), refNote = 'near the current map view';
+  const rest = text.replace(m[1], '').replace(/^[\s,]+|[\s,]+$/g, '');
+  if (before < 8 && /[぀-ヿ一-鿿]/.test(rest)) {     // Japanese place name after the code
+    try {
+      const r = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(normalize(rest)));
+      const data = r.ok ? await r.json() : [];
+      if (data.length) { const [x, y] = data[0].geometry.coordinates; ref = { lat: y, lng: x }; refNote = 'in ' + rest; }
+    } catch (e) {}
+  }
+  const p = olcRecover(code, ref.lat, ref.lng);
+  return { lat: p.lat, lng: p.lng, label: text.trim(), note: before < 8 ? refNote : '' };
+}
+
 async function geocode(text){
+  const link = parseGoogleLink(text);
+  if (link) return link;
   const m = text.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
   if (m) return { lat: +m[1], lng: +m[2], label: m[1] + ', ' + m[2] };
+  const pc = await parsePlusCode(text);
+  if (pc) return pc;
+  const loose = text.match(/(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/);
+  if (loose && validLatLng(+loose[1], +loose[2])) return { lat: +loose[1], lng: +loose[2], label: loose[1] + ', ' + loose[2] };
   const q = normalize(text);
   const r = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q));
   if (!r.ok) throw new Error('The address lookup failed. Try coordinates instead.');
@@ -165,29 +253,51 @@ async function findBuilding(lat, lng){
   return best;
 }
 
-document.getElementById('addForm').addEventListener('submit', async ev => {
+// Returns true when a new building was added.
+async function addBuilding(g){
+  setStatus('Finding the building…');
+  const b = await findBuilding(g.lat, g.lng);
+  if (b && entries.some(e => e.wayId === b.id)) { setStatus('That building is already on your map.'); map.setView([g.lat, g.lng], 18); return false; }
+  let coords, approx = false;
+  if (b) coords = b.coords;
+  else { coords = turf.circle([g.lng, g.lat], 6, { units: 'meters', steps: 16 }).geometry.coordinates; approx = true; }
+  entries.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), wayId: b ? b.id : null,
+    label: g.label, lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) });
+  save(); render(false); map.setView([g.lat, g.lng], 18);
+  const note = g.note ? ' Plus Code placed ' + g.note + '.' : '';
+  setStatus((approx ? 'Added. No outline exists here, so it shows as a small circle.' : 'Added.') + note);
+  return true;
+}
+
+let busy = false;
+async function runAdd(getPlace, onAdded){
+  if (busy) return;
+  busy = true;
+  const btn = document.getElementById('addBtn');
+  btn.disabled = true; setStatus('Looking up…');
+  try {
+    if (await addBuilding(await getPlace()) && onAdded) onAdded();
+  } catch (err) {
+    setStatus(err.message || 'Something went wrong. Check your connection.', true);
+  } finally { btn.disabled = false; busy = false; }
+}
+
+document.getElementById('addForm').addEventListener('submit', ev => {
   ev.preventDefault();
   const input = document.getElementById('addr');
   const text = input.value.trim();
   if (!text) return;
-  const btn = document.getElementById('addBtn');
-  btn.disabled = true; setStatus('Looking up…');
-  try {
-    const g = await geocode(text);
-    setStatus('Finding the building…');
-    const b = await findBuilding(g.lat, g.lng);
-    if (b && entries.some(e => e.wayId === b.id)) { setStatus('That building is already on your map.'); map.setView([g.lat, g.lng], 18); return; }
-    let coords, approx = false;
-    if (b) coords = b.coords;
-    else { coords = turf.circle([g.lng, g.lat], 6, { units: 'meters', steps: 16 }).geometry.coordinates; approx = true; }
-    entries.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), wayId: b ? b.id : null,
-      label: g.label, lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) });
-    save(); render(false); map.setView([g.lat, g.lng], 18);
-    input.value = '';
-    setStatus(approx ? 'Added. No outline exists here, so it shows as a small circle.' : 'Added.');
-  } catch (err) {
-    setStatus(err.message || 'Something went wrong. Check your connection.', true);
-  } finally { btn.disabled = false; }
+  runAdd(() => geocode(text), () => { input.value = ''; });
+});
+
+// Long-press (or right-click) the map to add the building there.
+map.on('contextmenu', e => {
+  const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
+  const box = document.createElement('div');
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
+  b.onclick = () => { map.closePopup(); runAdd(async () => ({ lat, lng, label: lat + ', ' + lng })); };
+  box.appendChild(b);
+  L.popup({ closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
 });
 
 document.getElementById('listBtn').onclick = () => { const l = document.getElementById('list'); l.hidden = !l.hidden; };
