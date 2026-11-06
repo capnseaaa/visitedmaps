@@ -134,6 +134,10 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .ph-search{display:flex;gap:6px}
 .ph-search input{flex:1;min-width:0;font:inherit;font-size:16px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
 .ph-search button{font-size:14px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.ph-ai{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.ph-ai small{color:var(--muted)}
+.ph-ai a{color:var(--accent)}
+.ph-ai button.primary{font-size:14px;padding:9px 14px;border-radius:10px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:600}
 .ph-results{display:flex;flex-direction:column}
 .ph-results div{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
 .ph-results span{flex:1;min-width:0;overflow-wrap:anywhere}
@@ -164,6 +168,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .card .go{width:100%;font-size:16px;padding:13px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:700}
 
 /* Map popups follow the theme */
+/* New building flash: translucent red outline, three pulses, then fades out. */
+.flash-new{animation:flashNew 2.6s ease-in-out forwards;pointer-events:none}
+@keyframes flashNew{0%{opacity:0}12%{opacity:.75}28%{opacity:.15}44%{opacity:.75}60%{opacity:.15}76%{opacity:.75}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.flash-new{animation:flashFade 2.6s ease-out forwards}}
+@keyframes flashFade{0%,60%{opacity:.7}100%{opacity:0}}
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--fg);box-shadow:var(--shadow)}
 .leaflet-popup-content-wrapper{border-radius:var(--r)}
 .leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
@@ -812,19 +821,21 @@ async function osmBuilding(lat, lng){
   return best;
 }
 
-// A building's name, in this order: English name on the outline; the name you searched for;
-// OpenStreetMap's reverse search (may name a shop inside); the outline's local name; "Building in <area>".
+// A building's name, in this order: the outline's local (Japanese) name; the name you searched for
+// (Google link, search result); OpenStreetMap's reverse search, local name first (may name a shop
+// inside); "<area>の建物".
 // Never coordinates, codes or links. Editors can rename any building.
 const CJK = /[぀-ヿ一-鿿]/;
 const looksLikeNoName = t => !t || /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(t.trim()) || /^(Photo )?-?\d+\.\d+/.test(t) ||
   /https?:\/\//.test(t) || /^[23456789CFGHJMPQRVWX]{4,8}\+/i.test(t) || /\d+\s*Chome|\d{3}-\d{4}/i.test(t);
-// Names: an English name if there is one, otherwise the local (often Japanese) name.
-// Road names and shops that are not inside the building are skipped.
+// Names: the local (usually Japanese) name, so every building uses the same style.
+// An English name is used only when there is no local one. Road names and shops that
+// are not inside the building are skipped. A name from a Google link or search is kept as is.
 const LATIN_KEYS = ['name:en', 'name:latin', 'name:ja-Latn', 'name:ja_rm', 'name:ja-Hrkt-Latn'];
-const latinOf = (o = {}) => LATIN_KEYS.map(k => o[k]).find(v => v && v.trim() && !CJK.test(v)) || '';
+const latinOf = o => LATIN_KEYS.map(k => (o || {})[k]).find(v => v && v.trim() && !CJK.test(v)) || '';
 async function buildingName(lat, lng, tags = {}, given = '', coords = null, reverse = null){
-  const en = latinOf(tags) || tags.name;
-  if (en) return en;
+  const local = (tags.name || '').trim() || latinOf(tags);
+  if (local) return local;
   if (!looksLikeNoName(given)) return given;          // a name you searched for (Google link, photo search)
   let area = '';
   try {
@@ -835,20 +846,20 @@ async function buildingName(lat, lng, tags = {}, given = '', coords = null, reve
       if (coords && r.osm_type === 'node' && r.lat && r.lon) {
         try { inside = turf.booleanPointInPolygon(turf.point([+r.lon, +r.lat]), turf.buffer(turf.polygon(coords), 3, { units: 'meters' })); } catch (e) {}
       }
-      const n = latinOf(r.namedetails) || (r.name || '').trim();
+      const n = ((r.namedetails || {}).name || '').trim() || (r.name || '').trim() || latinOf(r.namedetails);
       if (n && !isRoad && inside && !/^\d/.test(n)) return n;
       const a = r.address || {};
       const parts = [a.quarter, a.neighbourhood, a.suburb, a.city_district, a.city];
-      area = parts.find(x => x && !CJK.test(x)) || parts.find(Boolean) || '';
+      area = parts.find(Boolean) || '';
     }
   } catch (e) {}
-  return area ? 'Building in ' + area : 'Unnamed building';
+  return area ? area + 'の建物' : '名称不明の建物';
 }
 async function nominatimReverse(lat, lng){
   const wait = 1100 - (Date.now() - lastNominatim);
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastNominatim = Date.now();
-  const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&namedetails=1&accept-language=en&lat=' + lat + '&lon=' + lng);
+  const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&namedetails=1&accept-language=ja&lat=' + lat + '&lon=' + lng);
   return r.ok ? r.json() : null;
 }
 
@@ -878,9 +889,21 @@ async function addBuilding(g){
   const { data, error } = await db.from(TABLE).insert(toRow(entry)).select().single();
   if (error) { setStatus(dbErr(error), true); map.setView([g.lat, g.lng], 18); return false; }
   entries.push(toEntry(data)); render(false); map.setView([g.lat, g.lng], 18);
+  flashBuilding(coords);
   const note = (g.note ? ' Plus Code placed ' + g.note + '.' : '') + (g.approxNote ? ' Location is the nearest block, so check it is the right building.' : '');
   setStatus((approx ? 'Added. No outline exists here, so it shows as a small circle.' : 'Added.') + note);
   return true;
+}
+
+// A red outline that flashes a few times over a building just added on this device, then goes.
+function flashBuilding(coords){
+  try {
+    const layer = L.geoJSON({ type: 'Polygon', coordinates: coords }, {
+      interactive: false,
+      style: { color: '#e5322d', weight: 6, opacity: 1, fill: true, fillColor: '#e5322d', fillOpacity: .12, className: 'flash-new' }
+    }).addTo(map);
+    setTimeout(() => map.removeLayer(layer), 2700);
+  } catch (e) {}
 }
 
 let busy = false;
@@ -934,7 +957,7 @@ map.on('contextmenu', e => {
   const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
   const box = document.createElement('div'); box.className = 'pop';
   const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
-  b.onclick = () => { map.closePopup(); runAdd(async () => ({ lat, lng, label: lat + ', ' + lng })); };
+  b.onclick = () => { map.closePopup(); const label = pendingName || lat + ', ' + lng; pendingName = ''; runAdd(async () => ({ lat, lng, label })); };
   box.appendChild(b);
   L.popup({ ...POPUP_OPTS, closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
 });
@@ -1117,8 +1140,9 @@ db.channel('visited-buildings').on('postgres_changes', { event: '*', schema: 'pu
 const ready = Promise.all([loadEntries(true), refreshAuth()]);
 
 // ---------- Add from a photo ----------
-// 1. If the photo has a location, offer it. 2. Read text on the photo (Tesseract, Japanese + English).
-// 3. Search OpenStreetMap (Nominatim) for the chosen text near the photo or map, and add a result.
+// 1. If the photo has a location, offer it. 2. Claude Haiku 5.5 (read-photo Edge Function) reads the
+// sign and, without a photo location, searches the web for the address. 3. If that is unavailable,
+// read text with Tesseract and search OpenStreetMap (Nominatim) for it near the photo or map.
 const libs = {};
 function loadScript(src){
   return libs[src] ||= new Promise((res, rej) => {
@@ -1181,6 +1205,31 @@ async function searchPlaces(q, box){
   }));
 }
 
+// Name to use for the next long-press, set after Claude finds a building's area but not its spot.
+let pendingName = '';
+
+// Photo as base64 JPEG, at most 1280 px on the long side (keeps the Claude cost to about 1,200 image tokens).
+async function photoBase64(file){
+  const c = await shrink(file, 1280);
+  if (!(c instanceof HTMLCanvasElement)) throw new Error('Could not open the photo.');
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
+  return String(url).split(',')[1];
+}
+
+// Asks the "read-photo" Edge Function (Claude Haiku 5.5). Returns its answer or throws with a reason.
+async function readPhotoWithClaude(file, gps){
+  const image = await photoBase64(file);
+  const c = map.getCenter();
+  let data, error;
+  try { ({ data, error } = await db.functions.invoke('read-photo', { body: { image, gps, near: { lat: c.lat, lng: c.lng } } })); }
+  catch (e) { error = e; }
+  if (!error && data && !data.error) return data;
+  let msg = (data && data.error) || '';
+  try { msg = msg || (await error.context.json()).error || ''; } catch (e) {}
+  throw new Error(msg || 'The photo reader could not be reached.');
+}
+
 async function handlePhoto(file){
   const panel = document.getElementById('photoPanel');
   const note = el('span', { textContent: 'Reading the photo…' });
@@ -1188,30 +1237,73 @@ async function handlePhoto(file){
   close.onclick = () => { panel.hidden = true; panel.replaceChildren(); document.getElementById('photoSheet').hidden = true; };
   const thumb = el('img', { alt: '' }); thumb.src = URL.createObjectURL(file);
   const gpsRow = el('div', { className: 'ph-chips' });
+  const aiRow = el('div', { className: 'ph-ai' });
   const chips = el('div', { className: 'ph-chips' });
   const query = el('input', { type: 'text', placeholder: 'Building name', autocomplete: 'off' });
   const go = el('button', { type: 'submit', textContent: 'Search' });
   const form = el('form', { className: 'ph-search' }, [query, go]);
   const results = el('div', { className: 'ph-results' });
   form.onsubmit = ev => { ev.preventDefault(); if (query.value.trim()) searchPlaces(query.value.trim(), results); };
-  panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, chips, form, results);
+  panel.replaceChildren(el('div', { className: 'ph-head' }, [thumb, note, close]), gpsRow, aiRow, chips, form, results);
   closeSheets(); panel.hidden = false; document.getElementById('photoSheet').hidden = false;
-  photoRef = null;
+  photoRef = null; pendingName = '';
+  // The name typed or read so far; used by every "add" button below.
+  const nameNow = fallback => query.value.trim() || fallback;
 
   // Location stored in the photo.
+  let gps = null;
   try {
     await loadScript(EXIFR);
-    const gps = await exifr.gps(file);
-    if (gps && validLatLng(gps.latitude, gps.longitude)) {
-      photoRef = { lat: gps.latitude, lng: gps.longitude };
-      map.setView([gps.latitude, gps.longitude], 18);
+    const g = await exifr.gps(file);
+    if (g && validLatLng(g.latitude, g.longitude)) {
+      gps = { lat: g.latitude, lng: g.longitude };
+      photoRef = gps;
+      map.setView([gps.lat, gps.lng], 18);
       const use = el('button', { type: 'button', className: 'primary', textContent: 'Add building where photo was taken' });
-      use.onclick = () => runAdd(async () => ({ lat: gps.latitude, lng: gps.longitude, label: 'Photo ' + gps.latitude.toFixed(5) + ', ' + gps.longitude.toFixed(5) }));
+      use.onclick = () => runAdd(async () => ({ lat: gps.lat, lng: gps.lng, label: nameNow('Photo ' + gps.lat.toFixed(5) + ', ' + gps.lng.toFixed(5)) }));
       gpsRow.replaceChildren(use);
-    } else gpsRow.replaceChildren(el('small', { textContent: 'This photo has no location, so names are searched near the map view.' }));
-  } catch (e) { gpsRow.replaceChildren(el('small', { textContent: 'Could not read the photo location. Names are searched near the map view.' })); }
+    } else gpsRow.replaceChildren(el('small', { textContent: 'This photo has no location.' }));
+  } catch (e) { gpsRow.replaceChildren(el('small', { textContent: 'Could not read the photo location.' })); }
 
-  // Text on the photo.
+  const showChips = lines => chips.replaceChildren(...lines.map(t => { const b = el('button', { type: 'button', textContent: t });
+    b.onclick = () => { query.value = t; searchPlaces(t, results); }; return b; }));
+
+  // 1. Claude (Haiku 5.5) reads the sign and, with no photo location, searches the web for the address.
+  try {
+    note.textContent = gps ? 'Claude is reading the sign…' : 'Claude is reading the sign and looking up the address (up to about 30 s)…';
+    const r = await readPhotoWithClaude(file, gps);
+    if (r.name) query.value = r.name;
+    showChips([r.name, ...(r.text || [])].filter(Boolean).slice(0, 8));
+    const sure = { high: 'sure', medium: 'fairly sure', low: 'not sure' }[r.confidence] || 'not sure';
+    note.textContent = r.name ? 'Claude read “' + r.name + '” (' + sure + ').' : 'Claude found no building name. Type it below.';
+    const bits = [];
+    if (r.address) bits.push(el('div', { textContent: 'Address: ' + r.address }));
+    if (r.source && /^https?:\/\//.test(r.source)) bits.push(el('a', { href: r.source, target: '_blank', rel: 'noopener', textContent: 'Where Claude found it' }));
+    if (r.note) bits.push(el('small', { textContent: r.note }));
+    if (!gps && r.lat != null && r.lng != null && validLatLng(r.lat, r.lng)) {
+      map.setView([r.lat, r.lng], 18);
+      const add = el('button', { type: 'button', className: 'primary', textContent: 'Add at the found location' });
+      add.onclick = () => runAdd(async () => ({ lat: r.lat, lng: r.lng, label: nameNow(r.name) }));
+      bits.push(add, el('small', { textContent: 'After adding, check it is the right building. Listing pins can be a little off.' }));
+    } else if (!gps && r.address) {
+      const show = el('button', { type: 'button', className: 'primary', textContent: 'Show the area on the map' });
+      show.onclick = async () => {
+        try {
+          const g = await geocode(r.address);
+          map.setView([g.lat, g.lng], 18);
+          pendingName = nameNow(r.name);
+          setStatus('Long-press the building to add it as “' + pendingName + '”.');
+        } catch (e) { setStatus('Could not find that address on the map.', true); }
+      };
+      bits.push(show, el('small', { textContent: 'Only the area is known, not the exact building.' }));
+    }
+    aiRow.replaceChildren(...bits);
+    return;
+  } catch (e) {
+    aiRow.replaceChildren(el('small', { textContent: 'Claude photo reader unavailable: ' + e.message + ' Using the basic reader.' }));
+  }
+
+  // 2. Backup: Tesseract text reader in the browser, then OpenStreetMap name search.
   try {
     note.textContent = 'Loading the text reader (first time can take a while)…';
     await loadScript(TESSERACT);
@@ -1222,8 +1314,7 @@ async function handlePhoto(file){
     const lines = cleanLines(out.data.text || '');
     if (lines.length) {
       note.textContent = 'Tap the building name, or type it below.';
-      chips.replaceChildren(...lines.map(t => { const b = el('button', { type: 'button', textContent: t });
-        b.onclick = () => { query.value = t; searchPlaces(t, results); }; return b; }));
+      showChips(lines);
       query.value = lines[0];
     } else note.textContent = 'No text found on the photo. Type the building name below.';
   } catch (e) {
