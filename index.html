@@ -132,6 +132,9 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 
 .sheet p{margin:4px 0 10px;color:var(--muted);font-size:14px}
 #signInForm{display:flex;gap:8px}
+#remarksText{display:block;width:100%;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);resize:vertical;margin:4px 0 10px}
+.sheet-row{display:flex;gap:8px}
+.sheet-row .btn{flex:1;padding:11px 12px;font-size:15px}
 #signInForm input{flex:1;min-width:0;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
 #signInMsg{margin-top:10px;font-size:14px}
 #signInMsg.err{color:var(--err)}
@@ -228,6 +231,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   <form id="signInForm"><input id="signInEmail" type="email" autocomplete="email" placeholder="you@example.com" required aria-label="Email"><button class="btn primary" type="submit">Send link</button></form>
   <div id="signInMsg" role="status"></div>
 </div>
+<div id="remarksSheet" class="sheet" hidden>
+  <div class="sheet-head"><h2 id="remarksTitle">Remarks</h2><button id="remarksClose" class="icon-btn" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <textarea id="remarksText" maxlength="2000" rows="4" placeholder="Remarks" aria-label="Remarks"></textarea>
+  <div class="sheet-row"><button id="remarksCancel" class="btn" type="button">Cancel</button><button id="remarksSave" class="btn primary" type="button">Save</button></div>
+</div>
 <div id="photoSheet" class="sheet" hidden><div id="photoPanel" hidden></div></div>
 <input id="importFile" type="file" accept="application/json,.json">
 <input id="photoFile" type="file" accept="image/*">
@@ -262,6 +270,10 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 let entries = [];
 let me = null, canEdit = false, authReady = false;
+// Editor preview for testing on this computer only: http://127.0.0.1:8766/?editor=preview shows the
+// editor buttons without signing in. Nothing saves, because the database only accepts signed-in editors.
+const EDITOR_PREVIEW = /^(127\.0\.0\.1|localhost)$/.test(location.hostname) &&
+  new URLSearchParams(location.search).get('editor') === 'preview';
 // Buildings saved in this browser before the map moved to Supabase (offered for upload once).
 let localOld = [];
 try { localOld = JSON.parse(localStorage.getItem(KEY) || '[]').filter(e => e && e.coords); } catch (e) {}
@@ -273,6 +285,7 @@ const toRow = e => ({ id: String(e.id), way_id: e.wayId ?? null, label: e.label 
   ...(e.remarks ? { remarks: e.remarks } : {}) });   // remarks only when set, so adding works before the column exists
 function dbErr(error){
   if (!error) return '';
+  if (EDITOR_PREVIEW && !me) return 'Editor preview: nothing is saved.';
   if (error.code === '23505') return 'That building is already on the map.';
   if (error.code === '42703' || error.code === 'PGRST204') return 'Remarks need a one-time database update first. Ask the map owner.';
   if (error.code === '42501' || /row-level security|permission/i.test(error.message || '')) return 'You are not on the editor list, so you can view but not change the map.';
@@ -364,6 +377,9 @@ let buildingPop = null;
 function buildingPopup(e, latlng){
   const box = document.createElement('div'); box.className = 'pop';
   L.DomEvent.disableClickPropagation(box);
+  // Keep touches and keys inside the popup away from the map. Otherwise the map starts a drag on
+  // touch, which blocks typing in the remarks box on iPhones.
+  L.DomEvent.on(box, 'pointerdown touchstart mousedown keydown keypress keyup', L.DomEvent.stopPropagation);
   const t = document.createElement('div'); t.className = 'pop-title'; t.textContent = e.label;
   const row = document.createElement('div'); row.className = 'statuses';
   const current = statusOf(e);
@@ -389,22 +405,9 @@ function buildingPopup(e, latlng){
   const rem = document.createElement('div'); rem.className = 'pop-remarks'; rem.textContent = e.remarks || '';
   const remBtn = document.createElement('button'); remBtn.type = 'button'; remBtn.className = 'pop-del'; remBtn.style.color = 'var(--fg)';
   remBtn.textContent = e.remarks ? 'Edit remarks' : 'Add remarks';
-  remBtn.onclick = () => {
-    const ta = document.createElement('textarea'); ta.value = e.remarks || ''; ta.maxLength = 2000; ta.placeholder = 'Remarks';
-    const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save';
-    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
-    const btns = document.createElement('div'); btns.className = 'pop-row'; btns.append(cancel, save);
-    cancel.onclick = () => buildingPopup(e, latlng);
-    save.onclick = async () => {
-      const v = ta.value.trim();
-      save.disabled = true;
-      const { error } = await db.from(TABLE).update({ remarks: v }).eq('id', e.id);
-      save.disabled = false;
-      if (error) { setStatus(dbErr(error), true); return; }
-      e.remarks = v; renderList(); buildingPopup(e, latlng); setStatus('Remarks saved.');
-    };
-    box.replaceChildren(t, ta, btns); ta.focus();
-  };
+  // Popup content is swapped only after the tap finishes. If the tapped button is removed while the
+  // tap is still being handled, the map thinks the tap was on the map itself and closes the popup.
+  remBtn.onclick = () => setTimeout(() => openRemarks(e, latlng), 0);
   const del = document.createElement('button'); del.type = 'button'; del.className = 'pop-del'; del.textContent = 'Remove building';
   del.onclick = () => {
     if (del.dataset.armed) { removeEntry(e).then(ok => { if (ok) map.closePopup(); }); }
@@ -920,14 +923,41 @@ window.addEventListener('pageshow', resetPageScroll);
 map.on('contextmenu', e => {
   if (!requireEditor()) return;
   const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
-  const box = document.createElement('div');
+  const box = document.createElement('div'); box.className = 'pop';
   const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
   b.onclick = () => { map.closePopup(); runAdd(async () => ({ lat, lng, label: lat + ', ' + lng })); };
   box.appendChild(b);
   L.popup({ ...POPUP_OPTS, closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
 });
 
-function closeSheets(){ for (const id of ['listSheet', 'photoSheet', 'signInSheet']) document.getElementById(id).hidden = true; }
+function closeSheets(){ for (const id of ['listSheet', 'photoSheet', 'signInSheet', 'remarksSheet']) document.getElementById(id).hidden = true; }
+// Remarks are edited in a panel below the map. A text box inside a map popup does not redraw
+// while typing on iPhones, so typed text seemed to vanish.
+let remarksFor = null;
+function openRemarks(e, latlng){
+  remarksFor = { e, latlng };
+  map.closePopup(); closeSheets(); closeMenu();
+  document.getElementById('remarksTitle').textContent = e.label || 'Remarks';
+  const ta = document.getElementById('remarksText'); ta.value = e.remarks || '';
+  document.getElementById('remarksSheet').hidden = false;
+}
+document.getElementById('remarksClose').onclick = document.getElementById('remarksCancel').onclick = () => {
+  document.getElementById('remarksSheet').hidden = true;
+  if (remarksFor) buildingPopup(remarksFor.e, remarksFor.latlng);
+};
+document.getElementById('remarksSave').onclick = async () => {
+  if (!remarksFor) return;
+  const { e, latlng } = remarksFor;
+  const btn = document.getElementById('remarksSave');
+  const v = document.getElementById('remarksText').value.trim();
+  btn.disabled = true;
+  const { error } = await db.from(TABLE).update({ remarks: v }).eq('id', e.id);
+  btn.disabled = false;
+  if (error) { setStatus(dbErr(error), true); return; }
+  e.remarks = v; renderList();
+  document.getElementById('remarksSheet').hidden = true;
+  buildingPopup(e, latlng); setStatus('Remarks saved.');
+};
 document.getElementById('listBtn').onclick = () => {
   const sh = document.getElementById('listSheet'), open = sh.hidden;
   closeSheets(); sh.hidden = !open; closeMenu();
@@ -1060,6 +1090,7 @@ async function refreshAuth(){
   me = session ? session.user : null;
   canEdit = false;
   if (me) { const { data, error } = await db.rpc('is_map_editor'); canEdit = !error && data === true; }
+  if (EDITOR_PREVIEW) { canEdit = true; setStatus('Editor preview: buttons show, but nothing is saved.'); }
   authReady = true;
   updateAccountUi();
   if (location.hash.includes('access_token')) history.replaceState(null, '', location.pathname + location.search);
