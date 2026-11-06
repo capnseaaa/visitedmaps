@@ -49,9 +49,10 @@ function prompt(gps: LatLng | null, near: LatLng | null): string {
     'Read the building name exactly as written on the sign. Keep Japanese characters and Latin letters as they appear.',
     where,
     'Never invent a name, address or coordinates. If you are unsure, leave the field empty.',
+    'Give the address with the block and house number (for example 御幸通3丁目2-19) when a source shows it.',
     'Only give lat/lng if a source states them for this building; otherwise leave them null.',
     'Finish with one JSON object in a ```json block, with these keys:',
-    '{"name": string (building name as on the sign, or ""), "text": string[] (other readable text), ' +
+    '{"name": string (building name as on the sign, or ""), "text": string[] (other text exactly as written, no comments), ' +
       '"address": string (Japanese address as precise as found, or ""), "lat": number|null, "lng": number|null, ' +
       '"source": string (URL where the address was found, or ""), "confidence": "high"|"medium"|"low", ' +
       '"note": string (one short sentence on anything uncertain)}',

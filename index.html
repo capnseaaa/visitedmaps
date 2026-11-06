@@ -1286,16 +1286,32 @@ async function handlePhoto(file){
       add.onclick = () => runAdd(async () => ({ lat: r.lat, lng: r.lng, label: nameNow(r.name) }));
       bits.push(add, el('small', { textContent: 'After adding, check it is the right building. Listing pins can be a little off.' }));
     } else if (!gps && r.address) {
-      const show = el('button', { type: 'button', className: 'primary', textContent: 'Show the area on the map' });
-      show.onclick = async () => {
-        try {
-          const g = await geocode(r.address);
-          map.setView([g.lat, g.lng], 18);
-          pendingName = nameNow(r.name);
-          setStatus('Long-press the building to add it as “' + pendingName + '”.');
-        } catch (e) { setStatus('Could not find that address on the map.', true); }
-      };
-      bits.push(show, el('small', { textContent: 'Only the area is known, not the exact building.' }));
+      // A full address (with 番/号) finds the exact spot through GSI; otherwise only the area.
+      let spot = null;
+      try {
+        const g = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(normalize(r.address)));
+        const hit = g.ok ? (await g.json())[0] : null;
+        if (hit && /号|番地?\d*$/.test(hit.properties.title) && /\d/.test(r.address.replace(/^.*?[丁目町]/, ''))) {
+          const [lng, lat] = hit.geometry.coordinates; spot = { lat, lng, title: hit.properties.title };
+        }
+      } catch (e) {}
+      if (spot) {
+        map.setView([spot.lat, spot.lng], 18);
+        const add = el('button', { type: 'button', className: 'primary', textContent: 'Add at this address' });
+        add.onclick = () => runAdd(async () => ({ lat: spot.lat, lng: spot.lng, label: nameNow(r.name) }));
+        bits.push(add, el('small', { textContent: 'Map position from the address (' + spot.title + '). After adding, check it is the right building.' }));
+      } else {
+        const show = el('button', { type: 'button', className: 'primary', textContent: 'Show the area on the map' });
+        show.onclick = async () => {
+          try {
+            const g = await geocode(r.address);
+            map.setView([g.lat, g.lng], 18);
+            pendingName = nameNow(r.name);
+            setStatus('Long-press the building to add it as “' + pendingName + '”.');
+          } catch (e) { setStatus('Could not find that address on the map.', true); }
+        };
+        bits.push(show, el('small', { textContent: 'Only the area is known, not the exact building.' }));
+      }
     }
     aiRow.replaceChildren(...bits);
     return;
