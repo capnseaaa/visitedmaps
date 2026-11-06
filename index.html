@@ -19,6 +19,7 @@
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js"></script>
 <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <script src="basemap.js"></script>
 <style>
 :root{
@@ -129,6 +130,12 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .ph-results span{flex:1;min-width:0;overflow-wrap:anywhere}
 .ph-results small{color:var(--muted)}
 
+.sheet p{margin:4px 0 10px;color:var(--muted);font-size:14px}
+#signInForm{display:flex;gap:8px}
+#signInForm input{flex:1;min-width:0;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+#signInMsg{margin-top:10px;font-size:14px}
+#signInMsg.err{color:var(--err)}
+.item .by{color:var(--muted)}
 /* Welcome card */
 #welcome{position:fixed;inset:0;z-index:2000;background:rgba(10,20,15,.45);display:grid;place-items:end center;
   padding:16px max(16px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
@@ -185,12 +192,21 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
     <button id="importBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg><span>Restore<small>Load buildings from a backup file</small></span></button>
     <button id="kmlBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg><span>Export KML<small>For Google My Maps or Google Earth</small></span></button>
     <hr>
+    <button id="accountBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="accountText">Sign in to edit<small>Only invited editors can add buildings</small></span></button>
+    <button id="uploadLocalBtn" type="button" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/></svg><span id="uploadLocalText">Upload buildings from this device</span></button>
+    <hr>
     <button id="helpBtn" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/></svg><span>How to add buildings</span></button>
   </div>
 </div>
 <div id="listSheet" class="sheet" hidden>
   <div class="sheet-head"><h2>Your buildings</h2><button id="listClose" class="icon-btn" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   <div id="list"></div>
+</div>
+<div id="signInSheet" class="sheet" hidden>
+  <div class="sheet-head"><h2>Sign in to edit</h2><button id="signInClose" class="icon-btn" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <p>Anyone with the link can view this map. To add, recolor or remove buildings, your email must be on the editor list. Enter it and we will email you a sign-in link.</p>
+  <form id="signInForm"><input id="signInEmail" type="email" autocomplete="email" placeholder="you@example.com" required aria-label="Email"><button class="btn primary" type="submit">Send link</button></form>
+  <div id="signInMsg" role="status"></div>
 </div>
 <div id="photoSheet" class="sheet" hidden><div id="photoPanel" hidden></div></div>
 <input id="importFile" type="file" accept="application/json,.json">
@@ -200,12 +216,12 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   <div class="card" role="dialog" aria-labelledby="wTitle">
     <img class="logo" src="icons/icon-192.png" alt="">
     <h1 id="wTitle">Visited Buildings</h1>
-    <p>Color in every building you have been to.</p>
+    <p>Color in every building we have been to. Anyone with the link can look. Invited editors sign in from the ⋯ menu to add buildings.</p>
     <ul class="ways">
       <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span><div><b>Search or paste</b><span>An address, coordinates, a Plus Code or a Google Maps link.</span></div></li>
       <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span><div><b>Use a photo</b><span>Pick a photo of the building or its sign.</span></div></li>
       <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4a1.5 1.5 0 0 1 3 0v7.5M14 11.5V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.5 14a1.5 1.5 0 0 1 2.5-1.6L8 15"/></svg></span><div><b>Long-press the map</b><span>Hold on any building to add it.</span></div></li>
-      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 12l7-5M12 12v9M12 12L5 7"/></svg></span><div><b>Tap a building</b><span>Change its color or remove it.</span></div></li>
+      <li><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 12l7-5M12 12v9M12 12L5 7"/></svg></span><div><b>Tap a building</b><span>See what it is. Editors can change its color or remove it.</span></div></li>
     </ul>
     <button id="welcomeGo" class="go" type="button">Start</button>
   </div>
@@ -215,9 +231,37 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 const KEY = 'visited-buildings-v1';
 const GAP_METERS = 1.5; // outlines this close count as touching
 
+// ---------- Shared storage (Supabase) ----------
+// The publishable key is meant to be public. Database rules decide what it may do:
+// anyone can read; only signed-in people on the editor list can add, change or remove.
+const SUPABASE_URL = 'https://ywnzfpaxyuvanipbinzh.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_DRgl2UeHKYoL4R9CEqEGjA_LphEH8I8';
+const TABLE = 'visited_buildings';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { flowType: 'implicit', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+});
 let entries = [];
-try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { entries = []; }
-function save(){ try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {} }
+let me = null, canEdit = false, authReady = false;
+// Buildings saved in this browser before the map moved to Supabase (offered for upload once).
+let localOld = [];
+try { localOld = JSON.parse(localStorage.getItem(KEY) || '[]').filter(e => e && e.coords); } catch (e) {}
+
+const toEntry = r => ({ id: r.id, wayId: r.way_id, label: r.label, lat: r.lat, lng: r.lng, coords: r.coords,
+  approx: r.approx, color: r.color || undefined, date: r.visit_date, by: r.added_by_email });
+const toRow = e => ({ id: String(e.id), way_id: e.wayId ?? null, label: e.label || '', lat: +e.lat, lng: +e.lng, coords: e.coords,
+  approx: !!e.approx, color: e.color ? String(e.color).toLowerCase() : null, ...(e.date ? { visit_date: e.date } : {}) });
+function dbErr(error){
+  if (!error) return '';
+  if (error.code === '23505') return 'That building is already on the map.';
+  if (error.code === '42501' || /row-level security|permission/i.test(error.message || '')) return 'You are not on the editor list, so you can view but not change the map.';
+  return 'Could not save. Check your connection and try again.';
+}
+async function loadEntries(fit){
+  const { data, error } = await db.from(TABLE).select('*').order('created_at');
+  if (error) { setStatus('Could not load the map. Check your connection.', true); return; }
+  entries = data.map(toEntry);
+  render(fit);
+}
 
 const map = L.map('map', { zoomControl: false, maxZoom: 20 }).setView([34.6913, 135.1830], 15);
 // Keep the map's idea of its size right when the panel below grows or shrinks (photo panel, list).
@@ -288,7 +332,12 @@ function buildingPopup(e, latlng){
   const t = document.createElement('div'); t.className = 'pop-title'; t.textContent = e.label;
   const row = document.createElement('div'); row.className = 'swatches';
   const current = (e.color || fillColor).toLowerCase();
-  const pick = c => { e.color = c === SWATCHES[0] ? undefined : c; save(); render(false); buildingPopup(e, latlng); };
+  const pick = async c => {
+    const color = c === SWATCHES[0] ? null : c;
+    const { error } = await db.from(TABLE).update({ color }).eq('id', e.id);
+    if (error) { setStatus(dbErr(error), true); return; }
+    e.color = color || undefined; render(false); buildingPopup(e, latlng);
+  };
   for (const c of SWATCHES) {
     const s = document.createElement('button'); s.type = 'button'; s.className = 'swatch';
     s.style.background = c; s.setAttribute('aria-label', 'Colour ' + c);
@@ -303,14 +352,30 @@ function buildingPopup(e, latlng){
   row.appendChild(custom);
   const del = document.createElement('button'); del.type = 'button'; del.className = 'pop-del'; del.textContent = 'Remove building';
   del.onclick = () => {
-    if (del.dataset.armed) { entries = entries.filter(x => x.id !== e.id); save(); render(false); map.closePopup(); setStatus('Removed.'); }
+    if (del.dataset.armed) { removeEntry(e).then(ok => { if (ok) map.closePopup(); }); }
     else { del.dataset.armed = '1'; del.textContent = 'Tap again to remove'; }
   };
-  box.append(t, row, del);
+  const meta = document.createElement('small'); meta.style.color = 'var(--muted)';
+  meta.textContent = [e.date, e.by ? 'added by ' + e.by.split('@')[0] : ''].filter(Boolean).join(' · ');
+  const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'pop-del'; ren.style.color = 'var(--fg)'; ren.textContent = 'Rename';
+  ren.onclick = async () => {
+    const v = prompt('Building name', e.label); if (v == null || !v.trim() || v.trim() === e.label) return;
+    const { error } = await db.from(TABLE).update({ label: v.trim() }).eq('id', e.id);
+    if (error) { setStatus(dbErr(error), true); return; }
+    e.label = v.trim(); render(false); buildingPopup(e, latlng); setStatus('Renamed.');
+  };
+  if (canEdit) box.append(t, meta, row, ren, del); else box.append(t, meta);
   if (buildingPop && map.hasLayer(buildingPop)) buildingPop.setLatLng(latlng).setContent(box);
   else buildingPop = L.popup(POPUP_OPTS).setLatLng(latlng).setContent(box).openOn(map);
 }
 map.on('click', ev => { const e = entryAt(ev.latlng); if (e) buildingPopup(e, ev.latlng); });
+
+async function removeEntry(e){
+  const { error } = await db.from(TABLE).delete().eq('id', e.id);
+  if (error) { setStatus(dbErr(error), true); return false; }
+  entries = entries.filter(x => x.id !== e.id); render(false); setStatus('Removed.');
+  return true;
+}
 
 function renderList(){
   const box = document.getElementById('list');
@@ -322,16 +387,16 @@ function renderList(){
     row.appendChild(sw);
     const t = document.createElement('span');
     t.textContent = e.label + ' ';
-    const d = document.createElement('small'); d.textContent = e.date + (e.approx ? ' · no outline found' : '');
+    const d = document.createElement('small'); d.textContent = [e.date, e.approx ? 'no outline found' : '', e.by ? 'by ' + e.by.split('@')[0] : ''].filter(Boolean).join(' · ');
     t.appendChild(d);
     const go = document.createElement('button'); go.type = 'button'; go.textContent = 'Show';
     go.onclick = () => { closeSheets(); map.setView([e.lat, e.lng], 18); };
     const del = document.createElement('button'); del.type = 'button'; del.textContent = 'Remove';
     del.onclick = () => {
-      if (del.dataset.armed) { entries = entries.filter(x => x.id !== e.id); save(); render(false); setStatus('Removed.'); }
+      if (del.dataset.armed) removeEntry(e);
       else { del.dataset.armed = '1'; del.textContent = 'Tap again'; }
     };
-    row.append(t, go, del); box.appendChild(row);
+    row.append(t, go); if (canEdit) row.append(del); box.appendChild(row);
   });
 }
 
@@ -537,32 +602,74 @@ async function findBuilding(lat, lng){
     const a = ring[0], b = ring[ring.length - 1];
     if (a[0] !== b[0] || a[1] !== b[1]) ring.push(a);
     const poly = turf.polygon([ring]);
-    if (turf.booleanPointInPolygon(pt, poly)) return { id: w.id, coords: [ring] };
+    if (turf.booleanPointInPolygon(pt, poly)) return { id: w.id, coords: [ring], tags: w.tags || {} };
     const d = turf.distance(pt, turf.centroid(poly), { units: 'meters' });
-    if (d < bestDist) { bestDist = d; best = { id: w.id, coords: [ring] }; }
+    if (d < bestDist) { bestDist = d; best = { id: w.id, coords: [ring], tags: w.tags || {} }; }
   }
   return best;
+}
+
+// A building's name, in this order: English name on the outline; the name you searched for;
+// OpenStreetMap's reverse search (may name a shop inside); the outline's local name; "Building in <area>".
+// Never coordinates, codes or links. Editors can rename any building.
+const CJK = /[぀-ヿ一-鿿]/;
+const looksLikeNoName = t => !t || /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(t.trim()) || /^(Photo )?-?\d+\.\d+/.test(t) ||
+  /https?:\/\//.test(t) || /^[23456789CFGHJMPQRVWX]{4,8}\+/i.test(t) || /\d+\s*Chome|\d{3}-\d{4}/i.test(t);
+async function buildingName(lat, lng, tags = {}, given = ''){
+  const en = tags['name:en'] || tags['name:latin'] || tags['name:ja-Latn'] || tags['name:ja_rm'];
+  if (en) return en;
+  if (!looksLikeNoName(given)) return given;          // a name you searched for (Google link, photo search)
+  let area = '';
+  try {
+    const r = await nominatimReverse(lat, lng);
+    const n = r && r.name && r.name.trim();
+    if (n && !/^\d/.test(n)) return n;
+    const a = (r && r.address) || {};
+    area = [a.quarter, a.neighbourhood, a.suburb, a.city_district, a.city].find(x => x && !CJK.test(x)) || '';
+  } catch (e) {}
+  if (tags.name) return tags.name;
+  return area ? 'Building in ' + area : 'Unnamed building';
+}
+async function nominatimReverse(lat, lng){
+  const wait = 1100 - (Date.now() - lastNominatim);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastNominatim = Date.now();
+  const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=en&lat=' + lat + '&lon=' + lng);
+  return r.ok ? r.json() : null;
 }
 
 // Returns true when a new building was added.
 async function addBuilding(g){
   setStatus('Finding the building…');
   const b = await findBuilding(g.lat, g.lng);
-  if (b && entries.some(e => e.wayId === b.id)) { setStatus('That building is already on your map.'); map.setView([g.lat, g.lng], 18); return false; }
+  if (b && entries.some(e => e.wayId === b.id)) { setStatus('That building is already on the map.'); map.setView([g.lat, g.lng], 18); return false; }
   let coords, approx = false;
   if (b) coords = b.coords;
   else { coords = turf.circle([g.lng, g.lat], 6, { units: 'meters', steps: 16 }).geometry.coordinates; approx = true; }
-  entries.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), wayId: b ? b.id : null,
-    label: g.label, lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) });
-  save(); render(false); map.setView([g.lat, g.lng], 18);
+  setStatus('Getting the building name…');
+  const name = await buildingName(g.lat, g.lng, b ? b.tags : {}, g.label);
+  const entry = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 6), wayId: b ? b.id : null,
+    label: name, lat: g.lat, lng: g.lng, coords, approx, date: new Date().toISOString().slice(0, 10) };
+  setStatus('Saving…');
+  const { data, error } = await db.from(TABLE).insert(toRow(entry)).select().single();
+  if (error) { setStatus(dbErr(error), true); map.setView([g.lat, g.lng], 18); return false; }
+  entries.push(toEntry(data)); render(false); map.setView([g.lat, g.lng], 18);
   const note = (g.note ? ' Plus Code placed ' + g.note + '.' : '') + (g.approxNote ? ' Location is the nearest block, so check it is the right building.' : '');
   setStatus((approx ? 'Added. No outline exists here, so it shows as a small circle.' : 'Added.') + note);
   return true;
 }
 
 let busy = false;
+// Only editors may add. Visitors are sent to sign in; a pending Shortcut add waits for sign-in.
+function requireEditor(){
+  if (canEdit) return true;
+  if (!authReady) { setStatus('Checking sign-in…'); return false; }
+  if (me) setStatus('Your email is not on the editor list, so you can view but not add. Ask the map owner to add you.', true);
+  else openSignIn();
+  return false;
+}
 async function runAdd(getPlace, onAdded){
-  if (busy) return;
+  if (busy || !requireEditor()) return;
   busy = true;
   const btn = document.getElementById('addBtn');
   btn.disabled = true; setStatus('Looking up…');
@@ -577,12 +684,14 @@ document.getElementById('addForm').addEventListener('submit', ev => {
   ev.preventDefault();
   const input = document.getElementById('addr');
   const text = input.value.trim();
-  if (!text) return;
+  if (!requireEditor()) return;
+  if (!text) { input.focus(); setStatus('Type an address, paste a link, or long-press the map.'); return; }
   runAdd(() => geocode(text), () => { input.value = ''; });
 });
 
 // Long-press (or right-click) the map to add the building there.
 map.on('contextmenu', e => {
+  if (!requireEditor()) return;
   const lat = +e.latlng.lat.toFixed(6), lng = +e.latlng.lng.toFixed(6);
   const box = document.createElement('div');
   const b = document.createElement('button'); b.type = 'button'; b.className = 'primary'; b.textContent = 'Add this building';
@@ -591,7 +700,7 @@ map.on('contextmenu', e => {
   L.popup({ ...POPUP_OPTS, closeButton: true }).setLatLng(e.latlng).setContent(box).openOn(map);
 });
 
-function closeSheets(){ document.getElementById('listSheet').hidden = true; document.getElementById('photoSheet').hidden = true; }
+function closeSheets(){ for (const id of ['listSheet', 'photoSheet', 'signInSheet']) document.getElementById(id).hidden = true; }
 document.getElementById('listBtn').onclick = () => {
   const sh = document.getElementById('listSheet'), open = sh.hidden;
   closeSheets(); sh.hidden = !open; closeMenu();
@@ -660,21 +769,85 @@ document.getElementById('kmlBtn').onclick = () => {
   document.body.appendChild(a); a.click(); a.remove();
   setStatus('KML saved with ' + n + (n === 1 ? ' area.' : ' areas.'));
 };
-document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importBtn').onclick = () => { if (requireEditor()) document.getElementById('importFile').click(); };
+// Upload buildings one at a time, skipping any already on the map.
+async function uploadMany(list){
+  if (!requireEditor()) return { added: 0, skipped: 0 };
+  let added = 0, skipped = 0, failed = 0;
+  const haveIds = new Set(entries.map(e => e.id)), haveWays = new Set(entries.map(e => e.wayId).filter(Boolean));
+  for (const e of list) {
+    if (haveIds.has(String(e.id)) || (e.wayId && haveWays.has(e.wayId))) { skipped++; continue; }
+    setStatus('Uploading ' + (added + skipped + failed + 1) + ' of ' + list.length + '…');
+    const { error } = await db.from(TABLE).insert(toRow(e));
+    if (!error) added++; else if (error.code === '23505') skipped++; else failed++;
+  }
+  await loadEntries(true);
+  setStatus('Uploaded ' + added + (skipped ? ', skipped ' + skipped + ' already on the map' : '') + (failed ? ', ' + failed + ' failed' : '') + '.', failed > 0);
+  return { added, skipped, failed };
+}
 document.getElementById('importFile').onchange = async ev => {
   const file = ev.target.files[0]; if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (!Array.isArray(data)) throw new Error();
-    const have = new Set(entries.map(e => e.id));
-    let added = 0;
-    for (const e of data) if (e && e.coords && !have.has(e.id)) { entries.push(e); added++; }
-    save(); render(true); setStatus('Imported ' + added + ' buildings.');
-  } catch (err) { setStatus('That file is not a valid backup.', true); }
+    if (!Array.isArray(data)) throw new Error('bad');
+    await uploadMany(data.filter(e => e && e.coords));
+  } catch (err) { if (err.message === 'bad' || err instanceof SyntaxError) setStatus('That file is not a valid backup.', true); }
   ev.target.value = '';
 };
 
-render(true);
+// ---------- Sign-in ----------
+const signInSheet = document.getElementById('signInSheet');
+function openSignIn(){ closeSheets(); closeMenu(); signInSheet.hidden = false; document.getElementById('signInMsg').textContent = ''; }
+document.getElementById('signInClose').onclick = closeSheets;
+document.getElementById('signInForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const email = document.getElementById('signInEmail').value.trim().toLowerCase();
+  const msg = document.getElementById('signInMsg');
+  msg.className = ''; msg.textContent = 'Sending…';
+  const { error } = await db.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname, shouldCreateUser: true } });
+  if (error) {
+    msg.className = 'err';
+    msg.textContent = /rate|too many|429/i.test(error.message || '') ? 'Too many sign-in emails were sent recently. Try again in an hour.' : 'Could not send the email: ' + error.message;
+  } else msg.textContent = 'Check your email for a sign-in link. Open it on this phone; it signs in the browser that opens it.';
+};
+function updateAccountUi(){
+  const t = document.getElementById('accountText');
+  t.replaceChildren();
+  if (!me) t.append('Sign in to edit', Object.assign(document.createElement('small'), { textContent: 'Only invited editors can add buildings' }));
+  else t.append(canEdit ? 'Signed in' : 'Signed in (view only)', Object.assign(document.createElement('small'), { textContent: me.email + ' · tap to sign out' }));
+  const up = document.getElementById('uploadLocalBtn');
+  up.hidden = !(canEdit && localOld.length);
+  document.getElementById('uploadLocalText').textContent = 'Upload ' + localOld.length + (localOld.length === 1 ? ' building' : ' buildings') + ' saved on this device';
+  render(false);
+}
+document.getElementById('accountBtn').onclick = async () => {
+  if (!me) { openSignIn(); return; }
+  await db.auth.signOut(); setStatus('Signed out.');
+};
+document.getElementById('uploadLocalBtn').onclick = async () => {
+  const r = await uploadMany(localOld);
+  if (r && !r.failed) { try { localStorage.removeItem(KEY); } catch (e) {} localOld = []; updateAccountUi(); }
+};
+async function refreshAuth(){
+  const { data: { session } } = await db.auth.getSession();
+  me = session ? session.user : null;
+  canEdit = false;
+  if (me) { const { data, error } = await db.rpc('is_map_editor'); canEdit = !error && data === true; }
+  authReady = true;
+  updateAccountUi();
+  if (location.hash.includes('access_token')) history.replaceState(null, '', location.pathname + location.search);
+  // Finish an add that was waiting for sign-in (from the Shortcut link).
+  let pending = null; try { pending = sessionStorage.getItem('pendingAdd'); } catch (e) {}
+  if (pending && canEdit) { try { sessionStorage.removeItem('pendingAdd'); } catch (e) {} runAdd(() => geocode(pending)); }
+}
+db.auth.onAuthStateChange(ev => { if (ev !== 'INITIAL_SESSION') setTimeout(refreshAuth, 0); });
+
+// Live updates: when anyone changes the map, reload it.
+let reloadTimer;
+db.channel('visited-buildings').on('postgres_changes', { event: '*', schema: 'public', table: TABLE },
+  () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(() => loadEntries(false), 400); }).subscribe();
+
+const ready = Promise.all([loadEntries(true), refreshAuth()]);
 
 // ---------- Add from a photo ----------
 // 1. If the photo has a location, offer it. 2. Read text on the photo (Tesseract, Japanese + English).
@@ -790,7 +963,7 @@ async function handlePhoto(file){
     note.textContent = 'The text reader could not run. Type the building name below.';
   }
 }
-document.getElementById('photoBtn').onclick = () => document.getElementById('photoFile').click();
+document.getElementById('photoBtn').onclick = () => { if (requireEditor()) document.getElementById('photoFile').click(); };
 document.getElementById('photoFile').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) handlePhoto(f); };
 
 // Add from the page address, e.g. ...visitedmaps/?add=<Google Maps link, Plus Code or coordinates>.
@@ -802,7 +975,10 @@ document.getElementById('photoFile').onchange = ev => { const f = ev.target.file
   try { history.replaceState(null, '', location.pathname); } catch (e) {}   // a reload will not add it twice
   const input = document.getElementById('addr');
   input.value = text.trim();
-  document.getElementById('addForm').requestSubmit();
+  ready.then(() => {
+    if (canEdit) document.getElementById('addForm').requestSubmit();
+    else { try { sessionStorage.setItem('pendingAdd', text.trim()); } catch (e) {} requireEditor(); }
+  });
 })();
 </script>
 </body>
