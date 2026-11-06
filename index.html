@@ -25,10 +25,13 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column}
-/* Credits: one small line; tap to see all of them. */
+/* Credits: collapsed to the word "Credits"; tap to see all of them. */
 .leaflet-container .leaflet-control-attribution{font-size:9px;line-height:1.4;padding:1px 6px;max-width:calc(100vw - 24px);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.75);color:#555;cursor:pointer;border-top-left-radius:6px}
 .leaflet-container .leaflet-control-attribution.open{white-space:normal;background:rgba(255,255,255,.95)}
+/* Collapsed: hide every credit and show only the word "Credits". */
+.leaflet-container .leaflet-control-attribution:not(.open){font-size:0;padding:2px 8px;border-radius:6px 0 0 0}
+.leaflet-container .leaflet-control-attribution:not(.open)::before{content:"Credits";font-size:10px;color:#444}
 #map{flex:1;min-height:0;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .panel{background:var(--panel);border-top:1px solid var(--line);
   padding:12px max(14px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));
